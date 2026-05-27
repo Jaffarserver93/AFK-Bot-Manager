@@ -77,6 +77,7 @@ class BotManager {
   private screenshotTimer: ReturnType<typeof setInterval> | null = null;
   private afkTimer: ReturnType<typeof setTimeout> | null = null;
   private popupDismissTimer: ReturnType<typeof setInterval> | null = null;
+  private reloadTimer: ReturnType<typeof setInterval> | null = null;
   private latestScreenshot: string = "";
   private logs: LogEntry[] = [];
   private sseClients: Map<string, SSEClient> = new Map();
@@ -517,6 +518,7 @@ class BotManager {
       this.startScreenshotLoop(config.screenshotInterval);
       this.startAfkLoop();
       this.startPopupDismissLoop();
+      this.startReloadLoop();
     } catch (err: any) {
       this._status = "idle";
       this.log(`Bot failed to start: ${err.message}`, "error");
@@ -692,6 +694,105 @@ class BotManager {
     }, 10000);
   }
 
+  private startReloadLoop(): void {
+    if (this.reloadTimer) clearInterval(this.reloadTimer);
+    let reloadCount = 0;
+
+    this.reloadTimer = setInterval(async () => {
+      if (!this.page || this._status !== "running") return;
+      reloadCount++;
+      this.log(`Reloading page (cycle ${reloadCount})...`);
+      try {
+        await this.page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+        // Small settle time for SPA hydration
+        await new Promise((r) => setTimeout(r, 2000));
+        this.log(`Page reloaded (cycle ${reloadCount}). Checking server status...`);
+        await this.checkServerPaused();
+      } catch (err: any) {
+        this.log(`Page reload failed (cycle ${reloadCount}): ${err.message}`, "warn");
+      }
+    }, 60000);
+  }
+
+  private async checkServerPaused(): Promise<void> {
+    if (!this.page) return;
+    try {
+      const isPaused = await this.page.evaluate(() => {
+        return !!document.querySelector(".expired-warning-banner");
+      });
+
+      if (!isPaused) {
+        this.log("Server status: active — no pause banner detected.");
+        return;
+      }
+
+      this.log("Server paused banner detected! Scrolling to Cloudflare verification box...", "warn");
+
+      // Scroll to the Cloudflare verification widget (below the banner)
+      await this.page.evaluate(() => {
+        // Try to scroll to a cf-turnstile or iframe first, else scroll to banner
+        const cfEl =
+          document.querySelector("iframe[src*='challenges.cloudflare']") ||
+          document.querySelector(".cf-turnstile") ||
+          document.querySelector("[class*='turnstile']") ||
+          document.querySelector("[id*='turnstile']") ||
+          document.querySelector(".expired-warning-banner");
+        if (cfEl) {
+          cfEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        } else {
+          window.scrollBy(0, 400);
+        }
+      });
+
+      // Wait 5 seconds for Cloudflare to auto-verify
+      this.log("Waiting 5s for Cloudflare auto-verification...");
+      await new Promise((r) => setTimeout(r, 5000));
+
+      // Click the Extend / Renew button below the verification box
+      const clicked = await this.page.evaluate(() => {
+        const allButtons = Array.from(
+          document.querySelectorAll("button, a[role='button'], input[type='button'], input[type='submit']")
+        ) as HTMLElement[];
+        const extendBtn = allButtons.find((b) => {
+          const txt = (b.textContent || (b as HTMLInputElement).value || "").toLowerCase().trim();
+          return (
+            txt.includes("extend") ||
+            txt.includes("renew") ||
+            txt.includes("continue") ||
+            txt.includes("free") ||
+            txt.includes("keep") ||
+            txt.includes("resume") ||
+            txt.includes("activate")
+          );
+        });
+        if (extendBtn) {
+          extendBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+          extendBtn.click();
+          return extendBtn.textContent?.trim() || "button";
+        }
+        return null;
+      });
+
+      if (clicked) {
+        this.log(`Extend button clicked ("${clicked}"). Server should resume shortly.`);
+        // Wait for the banner to disappear
+        await new Promise((r) => setTimeout(r, 3000));
+        const stillPaused = await this.page.evaluate(
+          () => !!document.querySelector(".expired-warning-banner")
+        ).catch(() => false);
+        if (stillPaused) {
+          this.log("Banner still visible after click — may need manual intervention.", "warn");
+        } else {
+          this.log("Server paused banner gone — server resumed successfully.");
+        }
+      } else {
+        this.log("Could not find Extend/Renew button — manual action may be needed.", "warn");
+      }
+    } catch (err: any) {
+      this.log(`checkServerPaused error: ${err.message}`, "warn");
+    }
+  }
+
   private async cleanup() {
     if (this.screenshotTimer) {
       clearInterval(this.screenshotTimer);
@@ -704,6 +805,10 @@ class BotManager {
     if (this.popupDismissTimer) {
       clearInterval(this.popupDismissTimer);
       this.popupDismissTimer = null;
+    }
+    if (this.reloadTimer) {
+      clearInterval(this.reloadTimer);
+      this.reloadTimer = null;
     }
     if (this.browser) {
       try {
