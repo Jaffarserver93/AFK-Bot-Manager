@@ -310,26 +310,39 @@ class BotManager {
         }
       });
 
-      await this.page
-        .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 })
-        .catch(() => {
-          this.log(
-            "Navigation timeout after login — continuing anyway.",
-            "warn"
+      // Wait for either a navigation or a short timeout (SPA sites may not fire navigation events)
+      await Promise.race([
+        this.page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 8000 }),
+        new Promise((r) => setTimeout(r, 3000)),
+      ]).catch(() => {});
+
+      // Give SPA client-side routing time to settle
+      await new Promise((r) => setTimeout(r, 2000));
+
+      const urlAfterSubmit = this.page.url();
+      this.log(`Login submitted. Current URL: ${urlAfterSubmit}`);
+
+      const isStillOnLogin =
+        urlAfterSubmit.toLowerCase().includes("/auth/login") ||
+        urlAfterSubmit.toLowerCase().includes("/login");
+
+      if (isStillOnLogin) {
+        // Check if login form still has error messages visible
+        const hasError = await this.page.evaluate(() => {
+          const body = document.body?.innerText?.toLowerCase() || "";
+          return (
+            body.includes("invalid") ||
+            body.includes("incorrect") ||
+            body.includes("wrong password") ||
+            body.includes("error")
           );
-        });
+        }).catch(() => false);
 
-      const currentUrl = this.page.url();
-      this.log(`Login submitted. Current URL: ${currentUrl}`);
-
-      if (
-        currentUrl.toLowerCase().includes("login") ||
-        currentUrl.toLowerCase().includes("auth")
-      ) {
-        this.log(
-          "Warning: Still on login page. Credentials may be incorrect.",
-          "warn"
-        );
+        if (hasError) {
+          this.log("Login may have failed — error text detected on page.", "warn");
+        } else {
+          this.log("Login submitted — URL unchanged (SPA routing, this is normal).");
+        }
       } else {
         this.log("Logged in successfully.");
       }
@@ -339,6 +352,12 @@ class BotManager {
         waitUntil: "domcontentloaded",
         timeout: 30000,
       });
+
+      // Dismiss any popup overlays (ad blocker detection, cookie banners, etc.)
+      await this.dismissPopups();
+      await new Promise((r) => setTimeout(r, 1000));
+      await this.dismissPopups();
+
       this.log("Target URL loaded. Bot is now active.");
 
       this._status = "running";
@@ -351,6 +370,89 @@ class BotManager {
       this.log(`Bot failed to start: ${err.message}`, "error");
       await this.cleanup();
       throw err;
+    }
+  }
+
+  private async dismissPopups(): Promise<void> {
+    if (!this.page) return;
+    try {
+      const dismissed = await this.page.evaluate(() => {
+        let count = 0;
+
+        // 1. Remove elements that contain "Ad Blocker" text (modal overlays)
+        const allElements = Array.from(document.querySelectorAll("*")) as HTMLElement[];
+        for (const el of allElements) {
+          const text = el.innerText || "";
+          if (
+            text.includes("Ad Blocker Detected") ||
+            text.includes("AdBlock Detected") ||
+            text.includes("ad blocker") ||
+            text.includes("Please disable your ad blocker")
+          ) {
+            // Walk up to find the modal/overlay root (fixed/absolute positioned ancestor)
+            let target: HTMLElement | null = el;
+            while (target && target !== document.body) {
+              const style = window.getComputedStyle(target);
+              if (
+                style.position === "fixed" ||
+                style.position === "absolute" ||
+                target.classList.toString().toLowerCase().includes("modal") ||
+                target.classList.toString().toLowerCase().includes("overlay") ||
+                target.classList.toString().toLowerCase().includes("popup") ||
+                target.classList.toString().toLowerCase().includes("dialog")
+              ) {
+                target.remove();
+                count++;
+                break;
+              }
+              target = target.parentElement;
+            }
+            // If no positioned ancestor found, remove the element itself
+            if (target === document.body && el.parentElement) {
+              el.remove();
+              count++;
+            }
+          }
+        }
+
+        // 2. Remove common backdrop/overlay elements that block the page
+        const overlaySelectors = [
+          "[class*='overlay']",
+          "[class*='modal']",
+          "[class*='popup']",
+          "[class*='adblock']",
+          "[class*='ad-block']",
+          "[id*='adblock']",
+          "[id*='ad-block']",
+          "[id*='overlay']",
+          "[id*='modal']",
+        ];
+        for (const sel of overlaySelectors) {
+          try {
+            document.querySelectorAll(sel).forEach((el: any) => {
+              const style = window.getComputedStyle(el);
+              if (style.position === "fixed" || style.position === "absolute") {
+                el.remove();
+                count++;
+              }
+            });
+          } catch {}
+        }
+
+        // 3. Re-enable scroll if blocked by overlay
+        if (count > 0) {
+          document.body.style.overflow = "auto";
+          document.documentElement.style.overflow = "auto";
+        }
+
+        return count;
+      });
+
+      if (dismissed > 0) {
+        this.log(`Dismissed ${dismissed} popup overlay(s) — ad blocker detection removed.`);
+      }
+    } catch {
+      // ignore — page may have navigated
     }
   }
 
@@ -376,6 +478,8 @@ class BotManager {
     if (this.afkTimer) clearTimeout(this.afkTimer);
     const randomInterval = () => Math.floor(Math.random() * 120000) + 60000;
 
+    let afkCycleCount = 0;
+
     const doAfkAction = async () => {
       if (!this.page || this._status !== "running") return;
       try {
@@ -389,6 +493,12 @@ class BotManager {
         this.log("Anti-AFK action executed (mouse moved, page scrolled).");
       } catch {
         this.log("Anti-AFK action failed — page may have changed.", "warn");
+      }
+
+      // Dismiss popups every 3 AFK cycles (~3–6 min)
+      afkCycleCount++;
+      if (afkCycleCount % 3 === 0) {
+        await this.dismissPopups();
       }
       if (this._status === "running") {
         this.afkTimer = setTimeout(doAfkAction, randomInterval());
