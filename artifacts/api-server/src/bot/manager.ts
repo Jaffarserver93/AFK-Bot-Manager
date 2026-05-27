@@ -78,6 +78,8 @@ class BotManager {
   private afkTimer: ReturnType<typeof setTimeout> | null = null;
   private popupDismissTimer: ReturnType<typeof setInterval> | null = null;
   private reloadTimer: ReturnType<typeof setInterval> | null = null;
+  private _timeRemaining: string = "--:--";
+  private _timeRemainingMinutes: number = -1;
   private latestScreenshot: string = "";
   private logs: LogEntry[] = [];
   private sseClients: Map<string, SSEClient> = new Map();
@@ -90,6 +92,14 @@ class BotManager {
   get uptime(): number {
     if (!this.startTime) return 0;
     return Math.floor((Date.now() - this.startTime.getTime()) / 1000);
+  }
+
+  get timeRemaining(): string {
+    return this._timeRemaining;
+  }
+
+  get timeRemainingMinutes(): number {
+    return this._timeRemainingMinutes;
   }
 
   addSSEClient(id: string, res: import("express").Response) {
@@ -707,11 +717,149 @@ class BotManager {
         // Small settle time for SPA hydration
         await new Promise((r) => setTimeout(r, 2000));
         this.log(`Page reloaded (cycle ${reloadCount}). Checking server status...`);
+        await this.checkAndRenewServer();
         await this.checkServerPaused();
       } catch (err: any) {
         this.log(`Page reload failed (cycle ${reloadCount}): ${err.message}`, "warn");
       }
     }, 60000);
+  }
+
+  private async checkAndRenewServer(): Promise<void> {
+    if (!this.page) return;
+    try {
+      // Click the RENEW SERVER button in the left sidebar
+      this.log("Clicking RENEW SERVER sidebar button...");
+      const renewClicked = await this.page.evaluate(() => {
+        // Walk every element looking for one whose direct text content matches
+        const all = Array.from(document.querySelectorAll("a, button, div, span, li")) as HTMLElement[];
+        const btn = all.find((el) => {
+          const txt = el.textContent?.trim().toUpperCase() || "";
+          // match "RENEW SERVER" exactly, or an element that contains it as its primary text
+          return (
+            txt === "RENEW SERVER" ||
+            (txt.includes("RENEW") && txt.includes("SERVER") && txt.length < 40)
+          );
+        });
+        if (btn) { btn.click(); return true; }
+        return false;
+      });
+
+      if (!renewClicked) {
+        this.log("RENEW SERVER button not found — skipping renewal check.", "warn");
+        return;
+      }
+
+      // Wait for the modal to open (clock-time element appears)
+      await this.page.waitForFunction(
+        () => !!document.querySelector(".clock-time"),
+        { timeout: 8000, polling: 500 }
+      ).catch(() => null);
+
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Read the clock time from the modal
+      const clockTime = await this.page.evaluate(() => {
+        const el = document.querySelector(".clock-time");
+        return el ? el.textContent?.trim() ?? null : null;
+      });
+
+      if (!clockTime) {
+        this.log("Modal opened but clock-time not readable — closing.", "warn");
+        await this.page.keyboard.press("Escape").catch(() => {});
+        return;
+      }
+
+      // Parse time — format is MM:SS (e.g. "28:00" = 28 min, "00:52" = 52 sec)
+      this._timeRemaining = clockTime;
+      const parts = clockTime.split(":").map(Number);
+      let totalMinutes = 0;
+      if (parts.length === 2) {
+        // MM:SS
+        totalMinutes = parts[0] + (parts[1] > 0 ? 1 : 0); // round up seconds to next min
+      } else if (parts.length === 3) {
+        // HH:MM:SS
+        totalMinutes = parts[0] * 60 + parts[1];
+      }
+      this._timeRemainingMinutes = totalMinutes;
+
+      this.log(`Free server time remaining: ${clockTime} (~${totalMinutes} min)`);
+
+      // Close the modal
+      await this.page.keyboard.press("Escape").catch(() => {});
+      await new Promise((r) => setTimeout(r, 600));
+
+      // If under 28 minutes, trigger the Cloudflare bypass + extend flow
+      if (totalMinutes > 0 && totalMinutes < 28) {
+        this.log(
+          `⚠ Only ${totalMinutes} min left — triggering server renewal flow...`,
+          "warn"
+        );
+        // Scroll to CF verification, wait 5s, click Extend
+        await this.triggerRenewalFlow();
+      }
+    } catch (err: any) {
+      this.log(`checkAndRenewServer error: ${err.message}`, "warn");
+    }
+  }
+
+  private async triggerRenewalFlow(): Promise<void> {
+    if (!this.page) return;
+    try {
+      // Scroll to Cloudflare verification widget
+      await this.page.evaluate(() => {
+        const cfEl =
+          document.querySelector("iframe[src*='challenges.cloudflare']") ||
+          document.querySelector(".cf-turnstile") ||
+          document.querySelector("[class*='turnstile']") ||
+          document.querySelector("[id*='turnstile']") ||
+          document.querySelector(".expired-warning-banner");
+        if (cfEl) {
+          cfEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        } else {
+          window.scrollBy(0, 500);
+        }
+      });
+
+      this.log("Waiting 5s for Cloudflare auto-verification...");
+      await new Promise((r) => setTimeout(r, 5000));
+
+      // Click the Extend / Renew / Free button
+      const clicked = await this.page.evaluate(() => {
+        const allButtons = Array.from(
+          document.querySelectorAll("button, a[role='button'], input[type='button'], input[type='submit'], a")
+        ) as HTMLElement[];
+        const extendBtn = allButtons.find((b) => {
+          const txt = (b.textContent || (b as HTMLInputElement).value || "").toLowerCase().trim();
+          return (
+            txt.includes("extend") ||
+            txt.includes("renew") ||
+            txt.includes("continue") ||
+            txt.includes("free") ||
+            txt.includes("keep") ||
+            txt.includes("resume") ||
+            txt.includes("activate")
+          );
+        });
+        if (extendBtn) {
+          extendBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+          extendBtn.click();
+          return extendBtn.textContent?.trim() || "button";
+        }
+        return null;
+      });
+
+      if (clicked) {
+        this.log(`Renewal button clicked ("${clicked}"). Waiting for confirmation...`);
+        await new Promise((r) => setTimeout(r, 3000));
+        // Re-check the time after renewal
+        await this.checkAndRenewServer();
+      } else {
+        this.log("No Extend/Renew button found during renewal flow.", "warn");
+      }
+    } catch (err: any) {
+      this.log(`triggerRenewalFlow error: ${err.message}`, "warn");
+    }
   }
 
   private async checkServerPaused(): Promise<void> {

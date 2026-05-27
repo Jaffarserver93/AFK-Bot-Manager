@@ -33,6 +33,13 @@
           <div class="status-dot-lg" id="statusDotLg"></div>
         </div>
       </div>
+      <div class="status-row" id="timeRemainingRow" style="display:none; margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.08);">
+        <div class="status-info">
+          <div class="status-label">Free Time Left</div>
+          <div class="status-value" id="timeRemainingText" style="font-size:1.1rem;">--:--</div>
+        </div>
+        <div id="timeRemainingBadge" style="padding:4px 10px; border-radius:20px; font-size:0.75rem; font-weight:600; background:rgba(34,197,94,0.15); color:#22c55e; border:1px solid rgba(34,197,94,0.3); display:flex; align-items:center;">OK</div>
+      </div>
       <div class="action-buttons">
         <button class="btn btn-action" id="toggleBtn">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" id="toggleIcon"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -107,7 +114,33 @@ async function pollStatus() {
     const r = await fetch(API + '/bot/status');
     const d = await r.json();
     updateUI(d.status, d.uptimeSeconds || 0);
+    if (d.timeRemaining && d.timeRemaining !== '--:--') {
+      updateTimeRemaining(d.timeRemaining, d.timeRemainingMinutes ?? -1);
+    }
   } catch(e) {}
+}
+
+function updateTimeRemaining(tr, trMin) {
+  const row = document.getElementById('timeRemainingRow');
+  const txt = document.getElementById('timeRemainingText');
+  const badge = document.getElementById('timeRemainingBadge');
+  if (!row || !txt || !badge) return;
+  row.style.display = 'flex';
+  txt.textContent = tr;
+  const low = trMin >= 0 && trMin < 28;
+  if (low) {
+    badge.style.background = 'rgba(239,68,68,0.15)';
+    badge.style.color = '#ef4444';
+    badge.style.border = '1px solid rgba(239,68,68,0.3)';
+    badge.textContent = 'LOW';
+    txt.style.color = '#ef4444';
+  } else {
+    badge.style.background = 'rgba(34,197,94,0.15)';
+    badge.style.color = '#22c55e';
+    badge.style.border = '1px solid rgba(34,197,94,0.3)';
+    badge.textContent = 'OK';
+    txt.style.color = '';
+  }
 }
 
 function updateUI(status, uptime) {
