@@ -1,0 +1,184 @@
+/* ===== NEUMORPHIC DASHBOARD THEME ===== */
+:root {
+  --neu-bg: #e0e5ec;
+  --neu-text: #44546a;
+  --neu-sub: #8a9bae;
+  --neu-shadow-dark: #b8c0cc;
+  --neu-shadow-light: #ffffff;
+  --neu-accent: #6c8ebf;
+  --neu-accent2: #5a7fa8;
+  --neu-green: #4caf8c;
+  --neu-red: #e07070;
+  --neu-yellow: #d4a843;
+  --neu-border: rgba(150,165,180,0.2);
+  --neu-inner-dark: rgba(184,192,204,0.8);
+  --neu-inner-light: rgba(255,255,255,0.9);
+}
+
+html.theme-neumorphic body {
+  background: var(--neu-bg);
+  color: var(--neu-text);
+}
+
+/* Nav */
+html.theme-neumorphic .top-nav {
+  background: var(--neu-bg);
+  box-shadow: 0 2px 8px var(--neu-shadow-dark), 0 -1px 0 var(--neu-shadow-light);
+  position: sticky; top: 0; z-index: 100;
+}
+html.theme-neumorphic .nav-title { color: var(--neu-text); letter-spacing: 0.04em; }
+html.theme-neumorphic .nav-back {
+  background: var(--neu-bg);
+  color: var(--neu-sub);
+  box-shadow: 4px 4px 8px var(--neu-shadow-dark), -4px -4px 8px var(--neu-shadow-light);
+  border-radius: 10px;
+}
+html.theme-neumorphic .nav-back:active {
+  box-shadow: inset 3px 3px 6px var(--neu-shadow-dark), inset -3px -3px 6px var(--neu-shadow-light);
+}
+html.theme-neumorphic .nav-theme-btn {
+  background: var(--neu-bg);
+  color: var(--neu-sub);
+  box-shadow: 4px 4px 8px var(--neu-shadow-dark), -4px -4px 8px var(--neu-shadow-light);
+}
+html.theme-neumorphic .nav-theme-btn:active {
+  box-shadow: inset 3px 3px 6px var(--neu-shadow-dark), inset -3px -3px 6px var(--neu-shadow-light);
+}
+html.theme-neumorphic .uptime-display {
+  background: var(--neu-bg);
+  box-shadow: inset 2px 2px 5px var(--neu-shadow-dark), inset -2px -2px 5px var(--neu-shadow-light);
+  color: var(--neu-accent);
+  font-weight: 700;
+}
+
+/* Status dots */
+html.theme-neumorphic .status-dot { background: var(--neu-shadow-dark); }
+html.theme-neumorphic .status-dot.running { background: var(--neu-green); box-shadow: 0 0 0 2px rgba(76,175,140,0.2); animation: neu-pulse 2s infinite; }
+html.theme-neumorphic .status-dot.starting { background: var(--neu-yellow); animation: pulse-y 1s infinite; }
+html.theme-neumorphic .status-dot.stopping { background: var(--neu-red); animation: pulse-y 1s infinite; }
+html.theme-neumorphic .status-dot-lg { background: var(--neu-shadow-dark); }
+html.theme-neumorphic .status-dot-lg.running { background: var(--neu-green); box-shadow: 0 0 0 3px rgba(76,175,140,0.15); animation: neu-pulse 2s infinite; }
+html.theme-neumorphic .status-dot-lg.starting { background: var(--neu-yellow); }
+
+@keyframes neu-pulse { 0%,100%{box-shadow:0 0 0 2px rgba(76,175,140,0.1);} 50%{box-shadow:0 0 0 5px rgba(76,175,140,0.25);} }
+@keyframes pulse-y { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+
+/* Bottom Nav */
+html.theme-neumorphic .bottom-nav {
+  background: var(--neu-bg);
+  box-shadow: 0 -2px 8px var(--neu-shadow-dark), 0 1px 0 var(--neu-shadow-light);
+}
+html.theme-neumorphic .bottom-nav-item { color: var(--neu-sub); }
+html.theme-neumorphic .bottom-nav-item.active { color: var(--neu-accent); }
+
+/* Cards */
+html.theme-neumorphic .section-card {
+  background: var(--neu-bg);
+  box-shadow: 8px 8px 16px var(--neu-shadow-dark), -8px -8px 16px var(--neu-shadow-light);
+}
+html.theme-neumorphic .section-title { color: var(--neu-text); }
+html.theme-neumorphic .section-sub { color: var(--neu-sub); }
+html.theme-neumorphic .section-icon {
+  background: var(--neu-bg);
+  box-shadow: 3px 3px 6px var(--neu-shadow-dark), -3px -3px 6px var(--neu-shadow-light);
+  color: var(--neu-accent);
+}
+
+/* Status */
+html.theme-neumorphic .status-label { color: var(--neu-sub); }
+html.theme-neumorphic .status-value { color: var(--neu-text); }
+
+/* Buttons — neumorphic extruded/pressed */
+html.theme-neumorphic .btn {
+  background: var(--neu-bg);
+  box-shadow: 6px 6px 12px var(--neu-shadow-dark), -6px -6px 12px var(--neu-shadow-light);
+  color: var(--neu-text);
+  border-radius: 14px;
+}
+html.theme-neumorphic .btn:active {
+  box-shadow: inset 4px 4px 8px var(--neu-shadow-dark), inset -4px -4px 8px var(--neu-shadow-light);
+}
+html.theme-neumorphic .btn-action { color: var(--neu-accent); font-size: 0.9rem; }
+html.theme-neumorphic .btn-action.btn-stop { color: var(--neu-red); }
+html.theme-neumorphic .btn-restart { color: var(--neu-sub); }
+html.theme-neumorphic .btn-primary {
+  color: #fff;
+  background: linear-gradient(135deg, var(--neu-accent), var(--neu-accent2));
+  box-shadow: 5px 5px 10px rgba(108,142,191,0.3), -3px -3px 8px rgba(255,255,255,0.7);
+}
+html.theme-neumorphic .btn-primary:active {
+  box-shadow: inset 4px 4px 8px rgba(90,127,168,0.4), inset -2px -2px 6px rgba(255,255,255,0.3);
+}
+html.theme-neumorphic .btn-secondary { color: var(--neu-accent); }
+
+/* Preview */
+html.theme-neumorphic .preview-frame {
+  background: var(--neu-bg);
+  box-shadow: inset 4px 4px 10px var(--neu-shadow-dark), inset -4px -4px 10px var(--neu-shadow-light);
+  border-radius: 12px;
+}
+html.theme-neumorphic .preview-placeholder { color: var(--neu-sub); }
+html.theme-neumorphic .preview-interval {
+  background: var(--neu-bg);
+  box-shadow: inset 2px 2px 4px var(--neu-shadow-dark), inset -2px -2px 4px var(--neu-shadow-light);
+  color: var(--neu-accent);
+  font-size: 0.68rem;
+}
+
+/* Logs */
+html.theme-neumorphic .log-terminal {
+  background: var(--neu-bg);
+  box-shadow: inset 4px 4px 8px var(--neu-shadow-dark), inset -4px -4px 8px var(--neu-shadow-light);
+  border-radius: 10px;
+  color: var(--neu-text);
+}
+html.theme-neumorphic .log-ts { color: var(--neu-accent); }
+html.theme-neumorphic .log-info .log-msg { color: #4a6080; }
+html.theme-neumorphic .log-warn .log-msg { color: var(--neu-yellow); }
+html.theme-neumorphic .log-error .log-msg { color: var(--neu-red); }
+html.theme-neumorphic .log-empty { color: var(--neu-sub); }
+html.theme-neumorphic .clear-logs-btn { color: var(--neu-sub); background: var(--neu-bg); box-shadow: 3px 3px 6px var(--neu-shadow-dark), -3px -3px 6px var(--neu-shadow-light); }
+html.theme-neumorphic .clear-logs-btn:active { box-shadow: inset 2px 2px 4px var(--neu-shadow-dark), inset -2px -2px 4px var(--neu-shadow-light); }
+
+/* Forms */
+html.theme-neumorphic .form-label { color: var(--neu-sub); }
+html.theme-neumorphic .form-input {
+  background: var(--neu-bg);
+  box-shadow: inset 3px 3px 7px var(--neu-shadow-dark), inset -3px -3px 7px var(--neu-shadow-light);
+  color: var(--neu-text);
+  border-radius: 10px;
+}
+html.theme-neumorphic .form-input:focus {
+  box-shadow: inset 4px 4px 8px var(--neu-shadow-dark), inset -4px -4px 8px var(--neu-shadow-light), 0 0 0 2px rgba(108,142,191,0.3);
+}
+html.theme-neumorphic .form-slider { background: var(--neu-shadow-dark); }
+html.theme-neumorphic .form-slider::-webkit-slider-thumb {
+  background: var(--neu-bg);
+  box-shadow: 4px 4px 8px var(--neu-shadow-dark), -4px -4px 8px var(--neu-shadow-light);
+  border: 2px solid rgba(108,142,191,0.3);
+}
+html.theme-neumorphic .slider-value {
+  background: var(--neu-bg);
+  box-shadow: inset 2px 2px 4px var(--neu-shadow-dark), inset -2px -2px 4px var(--neu-shadow-light);
+  color: var(--neu-accent);
+}
+html.theme-neumorphic .pw-toggle { color: var(--neu-sub); }
+html.theme-neumorphic .form-input::placeholder { color: var(--neu-shadow-dark); }
+
+/* Theme pills */
+html.theme-neumorphic .theme-pill {
+  background: var(--neu-bg);
+  box-shadow: 4px 4px 8px var(--neu-shadow-dark), -4px -4px 8px var(--neu-shadow-light);
+  color: var(--neu-sub);
+}
+html.theme-neumorphic .theme-pill:active {
+  box-shadow: inset 3px 3px 6px var(--neu-shadow-dark), inset -3px -3px 6px var(--neu-shadow-light);
+}
+html.theme-neumorphic .theme-pill.active {
+  color: var(--neu-accent);
+  box-shadow: inset 3px 3px 6px var(--neu-shadow-dark), inset -3px -3px 6px var(--neu-shadow-light);
+}
+
+/* Toast */
+html.theme-neumorphic .toast-ok { background: var(--neu-bg); box-shadow: 6px 6px 12px var(--neu-shadow-dark), -6px -6px 12px var(--neu-shadow-light); color: var(--neu-green); }
+html.theme-neumorphic .toast-err { background: var(--neu-bg); box-shadow: 6px 6px 12px var(--neu-shadow-dark), -6px -6px 12px var(--neu-shadow-light); color: var(--neu-red); }
