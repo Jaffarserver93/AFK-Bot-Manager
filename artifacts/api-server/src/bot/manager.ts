@@ -1,35 +1,30 @@
-import puppeteer from "puppeteer-core";
+import { createRequire } from "module";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 import { logger } from "../lib/logger.js";
 
-const DATA_DIR = path.resolve(process.cwd(), "data");
+const _require = createRequire(import.meta.url);
+
+const DATA_DIR = process.env.DATA_DIR || path.resolve(process.cwd(), "data");
 const CREDENTIALS_FILE = path.join(DATA_DIR, "credentials.json");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 
 const CHROMIUM_PATH =
   process.env.CHROMIUM_PATH ||
-  process.env.PUPPETEER_EXECUTABLE_PATH ||
-  "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium";
+  "/usr/bin/chromium" ||
+  "/usr/bin/chromium-browser";
 
 const CHROMIUM_ARGS = [
   "--no-sandbox",
   "--disable-setuid-sandbox",
   "--disable-dev-shm-usage",
   "--disable-gpu",
-  "--no-first-run",
-  "--no-zygote",
-  "--single-process",
-  "--disable-extensions",
+  "--window-size=1280,720",
   "--disable-background-networking",
   "--disable-default-apps",
   "--disable-sync",
-  "--disable-translate",
-  "--hide-scrollbars",
-  "--metrics-recording-only",
   "--mute-audio",
-  "--safebrowsing-disable-auto-update",
 ];
 
 export interface Credentials {
@@ -120,6 +115,7 @@ class BotManager {
   }
 
   async readCredentials(): Promise<Credentials> {
+    await mkdir(DATA_DIR, { recursive: true });
     if (!existsSync(CREDENTIALS_FILE)) {
       return {
         loginUrl: "https://www.bytenut.com/auth/login",
@@ -138,6 +134,7 @@ class BotManager {
   }
 
   async readConfig(): Promise<Config> {
+    await mkdir(DATA_DIR, { recursive: true });
     if (!existsSync(CONFIG_FILE)) {
       return { screenshotInterval: 1000, theme: "cyberpunk" };
     }
@@ -168,24 +165,43 @@ class BotManager {
         );
       }
 
+      this.log("Loading puppeteer-real-browser for Cloudflare bypass...");
+
+      let connectFn: any;
+      try {
+        const mod = _require("puppeteer-real-browser");
+        connectFn = mod.connect;
+      } catch (err: any) {
+        this._status = "idle";
+        throw new Error(
+          `Failed to load puppeteer-real-browser: ${err.message}`
+        );
+      }
+
       this.log(`Launching Chromium: ${CHROMIUM_PATH}`);
 
-      this.browser = await puppeteer.launch({
-        executablePath: CHROMIUM_PATH,
-        headless: true,
+      const result = await connectFn({
+        headless: false,
         args: CHROMIUM_ARGS,
-        timeout: 30000,
+        customConfig: {
+          executablePath: CHROMIUM_PATH,
+        },
+        turnstile: true,
+        connectOption: {
+          defaultViewport: { width: 1280, height: 720 },
+        },
+        disableXvfb: true,
+        ignoreAllFlags: false,
       });
 
-      this.log("Chromium launched. Opening page...");
-      this.page = await this.browser.newPage();
+      this.browser = result.browser;
+      this.page = result.page;
 
       await this.page.setViewport({ width: 1280, height: 720 });
-      await this.page.setUserAgent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
-      );
 
+      this.log("Chromium launched successfully.");
       this.log(`Navigating to login URL: ${creds.loginUrl}`);
+
       await this.page.goto(creds.loginUrl, {
         waitUntil: "domcontentloaded",
         timeout: 30000,
@@ -249,7 +265,10 @@ class BotManager {
       await this.page
         .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 })
         .catch(() => {
-          this.log("Navigation timeout after login — continuing anyway.", "warn");
+          this.log(
+            "Navigation timeout after login — continuing anyway.",
+            "warn"
+          );
         });
 
       const currentUrl = this.page.url();
@@ -299,7 +318,10 @@ class BotManager {
       }
     };
     captureScreenshot();
-    this.screenshotTimer = setInterval(captureScreenshot, Math.max(100, intervalMs));
+    this.screenshotTimer = setInterval(
+      captureScreenshot,
+      Math.max(100, intervalMs)
+    );
   }
 
   private startAfkLoop() {

@@ -1,0 +1,12 @@
+node_modules
+**/node_modules
+**/.git
+**/.env
+**/dist
+**/*.log
+.agents
+.local
+artifacts/mockup-sandbox
+artifacts/frontend/src
+artifacts/frontend/node_modules
+lib/*/node_modules

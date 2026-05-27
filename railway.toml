@@ -1,0 +1,15 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/api/healthz"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+# ── Railway Volume ─────────────────────────────────────────────────────────────
+# In your Railway project dashboard:
+#   1. Go to your service → Volumes
+#   2. Add a volume and set Mount Path to: /data
+#   3. credentials.json and config.json will persist across deploys

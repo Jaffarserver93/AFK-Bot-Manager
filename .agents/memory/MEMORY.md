@@ -1,1 +1,2 @@
-- [Chromium path & puppeteer setup](chromium-puppeteer.md) — puppeteer-real-browser fails in this env; use puppeteer-core with the nix store Chromium path
+- [Chromium path & puppeteer setup](chromium-puppeteer.md) — puppeteer-real-browser fails in Replit NixOS env; use puppeteer-core locally, puppeteer-real-browser on Railway
+- [Railway deployment setup](railway-deployment.md) — Dockerfile + railway.toml created; volume at /data for credentials; Xvfb in start.sh
