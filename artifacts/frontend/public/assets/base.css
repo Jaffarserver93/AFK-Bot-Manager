@@ -80,6 +80,22 @@ a { text-decoration: none; }
 .theme-pills { display: flex; gap: 8px; flex-wrap: wrap; }
 .theme-pill { padding: 8px 16px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; transition: all 0.18s; }
 
+/* ===== Toggle Switch ===== */
+.toggle-switch { position: relative; display: inline-flex; align-items: center; cursor: pointer; flex-shrink: 0; }
+.toggle-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.toggle-track { width: 46px; height: 26px; border-radius: 13px; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.18); transition: all 0.22s; display: flex; align-items: center; padding: 2px; }
+.toggle-thumb { width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform 0.22s cubic-bezier(.34,1.56,.64,1); box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+.toggle-switch input:checked ~ .toggle-track { background: #7c3aed; border-color: #7c3aed; }
+.toggle-switch input:checked ~ .toggle-track .toggle-thumb { transform: translateX(20px); }
+
+/* ===== Proxy Section ===== */
+.proxy-row { display: flex; gap: 10px; }
+.proxy-row .form-group { margin-bottom: 14px; }
+.form-hint { font-size: 0.68rem; opacity: 0.5; margin-top: 4px; }
+.proxy-preview { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 8px; background: rgba(0,0,0,0.15); border: 1px solid rgba(255,255,255,0.07); margin-bottom: 14px; flex-wrap: wrap; }
+.proxy-preview-label { font-size: 0.72rem; opacity: 0.5; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
+.proxy-preview-val { font-family: 'Courier New', Courier, monospace; font-size: 0.78rem; color: #a78bfa; word-break: break-all; }
+
 /* ===== Toast ===== */
 .toast { position: fixed; top: 70px; left: 50%; transform: translateX(-50%); padding: 10px 20px; border-radius: 10px; font-size: 0.85rem; font-weight: 600; z-index: 999; min-width: 180px; text-align: center; animation: fadeInDown 0.3s; }
 @keyframes fadeInDown { from { opacity: 0; transform: translateX(-50%) translateY(-10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }

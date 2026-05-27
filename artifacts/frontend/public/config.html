@@ -88,6 +88,59 @@
       </div>
       <button class="btn btn-secondary btn-full" id="saveConfig">Save Settings</button>
     </div>
+
+    <!-- Proxy Section -->
+    <div class="section-card">
+      <div class="section-header">
+        <div class="section-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/></svg>
+        </div>
+        <div style="flex:1">
+          <div class="section-title">Proxy Settings</div>
+          <div class="section-sub">Oxylabs datacenter proxy</div>
+        </div>
+        <label class="toggle-switch" title="Enable proxy">
+          <input type="checkbox" id="proxyEnabled">
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+      </div>
+      <div id="proxyFields" style="display:none">
+        <div class="proxy-row">
+          <div class="form-group" style="flex:2">
+            <label class="form-label">Proxy Host</label>
+            <input type="text" id="proxyHost" class="form-input" value="dc.oxylabs.io" placeholder="dc.oxylabs.io">
+          </div>
+          <div class="form-group" style="flex:1">
+            <label class="form-label">Port</label>
+            <input type="number" id="proxyPort" class="form-input" value="8000" min="1" max="65535" placeholder="8000">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Country Code</label>
+          <input type="text" id="proxyCountry" class="form-input" value="US" maxlength="2" placeholder="US" style="text-transform:uppercase">
+          <div class="form-hint">2-letter ISO code (e.g. US, GB, DE)</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Proxy Username</label>
+          <input type="text" id="proxyUsername" class="form-input" placeholder="your_proxy_user" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Proxy Password</label>
+          <div class="input-pw-wrap">
+            <input type="password" id="proxyPassword" class="form-input" placeholder="Enter new password to change" autocomplete="off">
+            <button type="button" class="pw-toggle" id="proxyPwToggle" aria-label="Toggle proxy password">
+              <svg id="proxyEyeOpen" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg id="proxyEyeOff" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="proxy-preview">
+          <span class="proxy-preview-label">Effective user:</span>
+          <code class="proxy-preview-val" id="proxyPreview">user-username-country-US</code>
+        </div>
+      </div>
+      <button class="btn btn-secondary btn-full" id="saveProxy">Save Proxy</button>
+    </div>
   </div>
 
   <!-- Bottom Nav -->
@@ -129,6 +182,8 @@ async function loadCredentials() {
   } catch(e) {}
 }
 
+let _savedProxyPassword = '';
+
 async function loadConfig() {
   try {
     const r = await fetch(API + '/config');
@@ -137,7 +192,26 @@ async function loadConfig() {
     document.getElementById('screenshotInterval').value = iv;
     document.getElementById('intervalExact').value = iv;
     document.getElementById('intervalDisplay').textContent = iv + ' ms';
+
+    const proxy = d.proxy || {};
+    const enabled = !!proxy.enabled;
+    document.getElementById('proxyEnabled').checked = enabled;
+    document.getElementById('proxyFields').style.display = enabled ? 'block' : 'none';
+    document.getElementById('proxyHost').value = proxy.host || 'dc.oxylabs.io';
+    document.getElementById('proxyPort').value = proxy.port || 8000;
+    document.getElementById('proxyCountry').value = (proxy.country || 'US').toUpperCase();
+    document.getElementById('proxyUsername').value = proxy.username || '';
+    _savedProxyPassword = proxy.password || '';
+    document.getElementById('proxyPassword').value = '';
+    document.getElementById('proxyPassword').placeholder = _savedProxyPassword ? 'Password saved — enter new to change' : 'Enter proxy password';
+    updateProxyPreview();
   } catch(e) {}
+}
+
+function updateProxyPreview() {
+  const u = document.getElementById('proxyUsername').value || 'username';
+  const c = (document.getElementById('proxyCountry').value || 'US').toUpperCase();
+  document.getElementById('proxyPreview').textContent = `user-${u}-country-${c}`;
 }
 
 document.getElementById('screenshotInterval').addEventListener('input', function() {
@@ -204,6 +278,57 @@ document.getElementById('saveConfig').addEventListener('click', async function()
   }
   btn.disabled = false;
   btn.textContent = 'Save Settings';
+});
+
+document.getElementById('proxyEnabled').addEventListener('change', function() {
+  document.getElementById('proxyFields').style.display = this.checked ? 'block' : 'none';
+});
+
+document.getElementById('proxyUsername').addEventListener('input', updateProxyPreview);
+document.getElementById('proxyCountry').addEventListener('input', function() {
+  this.value = this.value.toUpperCase();
+  updateProxyPreview();
+});
+
+document.getElementById('proxyPwToggle').addEventListener('click', function() {
+  const inp = document.getElementById('proxyPassword');
+  const isHidden = inp.type === 'password';
+  inp.type = isHidden ? 'text' : 'password';
+  document.getElementById('proxyEyeOpen').style.display = isHidden ? 'none' : '';
+  document.getElementById('proxyEyeOff').style.display = isHidden ? '' : 'none';
+});
+
+document.getElementById('saveProxy').addEventListener('click', async function() {
+  const btn = this;
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  try {
+    const typedPw = document.getElementById('proxyPassword').value;
+    const body = {
+      proxy: {
+        enabled: document.getElementById('proxyEnabled').checked,
+        host: document.getElementById('proxyHost').value,
+        port: parseInt(document.getElementById('proxyPort').value) || 8000,
+        country: document.getElementById('proxyCountry').value.toUpperCase(),
+        username: document.getElementById('proxyUsername').value,
+        password: typedPw || _savedProxyPassword,
+      }
+    };
+    const r = await fetch(API + '/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (d.ok) {
+      showToast('Proxy settings saved!', true);
+      if (typedPw) {
+        _savedProxyPassword = typedPw;
+        document.getElementById('proxyPassword').value = '';
+        document.getElementById('proxyPassword').placeholder = 'Password saved — enter new to change';
+      }
+    } else showToast('Failed to save.', false);
+  } catch(e) {
+    showToast('Network error.', false);
+  }
+  btn.disabled = false;
+  btn.textContent = 'Save Proxy';
 });
 
 loadCredentials();

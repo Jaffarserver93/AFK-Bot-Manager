@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { botManager } from "../bot/manager.js";
+import { botManager, type ProxyConfig } from "../bot/manager.js";
 
 const router: IRouter = Router();
 
@@ -9,18 +9,33 @@ router.get("/config", async (_req: Request, res: Response): Promise<void> => {
 });
 
 router.post("/config", async (req: Request, res: Response): Promise<void> => {
-  const { screenshotInterval, theme } = req.body as {
+  const { screenshotInterval, theme, proxy } = req.body as {
     screenshotInterval?: number;
     theme?: string;
+    proxy?: Partial<ProxyConfig>;
   };
 
   const existing = await botManager.readConfig();
+
+  const updatedProxy: ProxyConfig = {
+    ...existing.proxy,
+    ...(proxy && typeof proxy === "object" ? {
+      enabled: typeof proxy.enabled === "boolean" ? proxy.enabled : existing.proxy.enabled,
+      host: typeof proxy.host === "string" && proxy.host.trim() ? proxy.host.trim() : existing.proxy.host,
+      port: typeof proxy.port === "number" && proxy.port > 0 ? proxy.port : existing.proxy.port,
+      username: typeof proxy.username === "string" ? proxy.username.trim() : existing.proxy.username,
+      password: typeof proxy.password === "string" && proxy.password !== "••••••••" ? proxy.password : existing.proxy.password,
+      country: typeof proxy.country === "string" && proxy.country.trim() ? proxy.country.trim().toUpperCase() : existing.proxy.country,
+    } : {}),
+  };
+
   const updated = {
     screenshotInterval:
       typeof screenshotInterval === "number"
         ? Math.max(100, screenshotInterval)
         : existing.screenshotInterval,
     theme: typeof theme === "string" ? theme : existing.theme,
+    proxy: updatedProxy,
   };
 
   await botManager.writeConfig(updated);

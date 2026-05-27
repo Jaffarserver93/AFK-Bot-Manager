@@ -15,7 +15,7 @@ const CHROMIUM_PATH =
   "/usr/bin/chromium" ||
   "/usr/bin/chromium-browser";
 
-const CHROMIUM_ARGS = [
+const BASE_CHROMIUM_ARGS = [
   "--no-sandbox",
   "--disable-setuid-sandbox",
   "--disable-dev-shm-usage",
@@ -34,9 +34,19 @@ export interface Credentials {
   password: string;
 }
 
+export interface ProxyConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  country: string;
+}
+
 export interface Config {
   screenshotInterval: number;
   theme: string;
+  proxy: ProxyConfig;
 }
 
 export interface LogEntry {
@@ -48,6 +58,15 @@ export interface LogEntry {
 type SSEClient = {
   res: import("express").Response;
   id: string;
+};
+
+const DEFAULT_PROXY: ProxyConfig = {
+  enabled: false,
+  host: "dc.oxylabs.io",
+  port: 8000,
+  username: "jxfrjxfr_m3SkL",
+  password: "IE6+AI+t47UssA",
+  country: "US",
 };
 
 class BotManager {
@@ -136,10 +155,15 @@ class BotManager {
   async readConfig(): Promise<Config> {
     await mkdir(DATA_DIR, { recursive: true });
     if (!existsSync(CONFIG_FILE)) {
-      return { screenshotInterval: 1000, theme: "cyberpunk" };
+      return { screenshotInterval: 1000, theme: "cyberpunk", proxy: DEFAULT_PROXY };
     }
     const raw = await readFile(CONFIG_FILE, "utf8");
-    return JSON.parse(raw) as Config;
+    const parsed = JSON.parse(raw) as Partial<Config>;
+    return {
+      screenshotInterval: parsed.screenshotInterval ?? 1000,
+      theme: parsed.theme ?? "cyberpunk",
+      proxy: { ...DEFAULT_PROXY, ...(parsed.proxy ?? {}) },
+    };
   }
 
   async writeConfig(config: Config): Promise<void> {
@@ -165,6 +189,20 @@ class BotManager {
         );
       }
 
+      // ── Build Chromium args, injecting proxy if enabled ──────────────────────
+      const chromiumArgs = [...BASE_CHROMIUM_ARGS];
+      const proxy = config.proxy;
+
+      if (proxy.enabled) {
+        const proxyUrl = `https://${proxy.host}:${proxy.port}`;
+        chromiumArgs.push(`--proxy-server=${proxyUrl}`);
+        this.log(
+          `Proxy enabled: ${proxy.host}:${proxy.port} (country: ${proxy.country})`
+        );
+      } else {
+        this.log("Proxy disabled — using direct connection.");
+      }
+
       this.log("Loading puppeteer-real-browser for Cloudflare bypass...");
 
       let connectFn: any;
@@ -182,7 +220,7 @@ class BotManager {
 
       const result = await connectFn({
         headless: false,
-        args: CHROMIUM_ARGS,
+        args: chromiumArgs,
         customConfig: {
           executablePath: CHROMIUM_PATH,
         },
@@ -198,6 +236,16 @@ class BotManager {
       this.page = result.page;
 
       await this.page.setViewport({ width: 1280, height: 720 });
+
+      // ── Authenticate proxy if enabled ────────────────────────────────────────
+      if (proxy.enabled) {
+        const proxyUser = `user-${proxy.username}-country-${proxy.country}`;
+        await this.page.authenticate({
+          username: proxyUser,
+          password: proxy.password,
+        });
+        this.log(`Proxy auth set for user: ${proxyUser}`);
+      }
 
       this.log("Chromium launched successfully.");
       this.log(`Navigating to login URL: ${creds.loginUrl}`);
