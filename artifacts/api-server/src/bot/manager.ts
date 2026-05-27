@@ -714,9 +714,26 @@ class BotManager {
       this.log(`Reloading page (cycle ${reloadCount})...`);
       try {
         await this.page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
-        // Small settle time for SPA hydration
-        await new Promise((r) => setTimeout(r, 2000));
-        this.log(`Page reloaded (cycle ${reloadCount}). Checking server status...`);
+
+        // Wait for the SPA sidebar to render — poll until RENEW SERVER text appears
+        this.log(`Page reloaded (cycle ${reloadCount}). Waiting for page to render...`);
+        await this.page.waitForFunction(
+          () => {
+            const all = Array.from(document.querySelectorAll("a, button, div, span, li"));
+            return all.some((el) => {
+              const txt = (el.textContent || "").trim().toUpperCase();
+              return txt === "RENEW SERVER" || (txt.includes("RENEW") && txt.includes("SERVER") && txt.length < 40);
+            });
+          },
+          { timeout: 20000, polling: 800 }
+        ).catch(() => {
+          this.log("RENEW SERVER button not found after page load — page may still be loading.", "warn");
+        });
+
+        // Short buffer for Vue reactivity to fully settle after the element appears
+        await new Promise((r) => setTimeout(r, 800));
+
+        this.log(`Page ready (cycle ${reloadCount}). Checking server status...`);
         await this.checkAndRenewServer();
         await this.checkServerPaused();
       } catch (err: any) {
