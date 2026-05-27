@@ -313,73 +313,162 @@ class BotManager {
       this.log("Chromium launched successfully.");
       this.log(`Navigating to login URL: ${creds.loginUrl}`);
 
+      // Allow extra time — Cloudflare may take 5–15s to verify before showing login page
       await this.page.goto(creds.loginUrl, {
         waitUntil: "domcontentloaded",
-        timeout: 30000,
+        timeout: 60000,
       });
 
-      this.log("Page loaded. Filling login credentials...");
-
-      await this.page.evaluate(
-        (username: string, password: string) => {
-          const inputs = Array.from(document.querySelectorAll("input"));
-          const usernameInput = inputs.find(
-            (i) =>
-              i.type === "text" ||
-              i.type === "email" ||
-              i.name?.toLowerCase().includes("user") ||
-              i.name?.toLowerCase().includes("email") ||
-              i.id?.toLowerCase().includes("user") ||
-              i.id?.toLowerCase().includes("email")
-          );
-          const passwordInput = inputs.find(
-            (i) =>
-              i.type === "password" ||
-              i.name?.toLowerCase().includes("pass") ||
-              i.id?.toLowerCase().includes("pass")
-          );
-          if (usernameInput) {
-            usernameInput.value = username;
-            usernameInput.dispatchEvent(new Event("input", { bubbles: true }));
-            usernameInput.dispatchEvent(new Event("change", { bubbles: true }));
-          }
-          if (passwordInput) {
-            passwordInput.value = password;
-            passwordInput.dispatchEvent(new Event("input", { bubbles: true }));
-            passwordInput.dispatchEvent(new Event("change", { bubbles: true }));
-          }
+      // ── Wait for Cloudflare to pass and the real login form to appear ─────────
+      this.log("Waiting for login form (Cloudflare may be verifying)...");
+      const formReady = await this.page.waitForFunction(
+        () => {
+          const body = document.body?.innerText || "";
+          // Still on Cloudflare challenge — keep waiting
+          if (
+            body.includes("Verifying you are human") ||
+            body.includes("Just a moment") ||
+            body.includes("Please wait") ||
+            body.includes("Checking your browser")
+          ) return false;
+          // Login form is present when a password input exists
+          return !!document.querySelector('input[type="password"]');
         },
-        creds.username,
-        creds.password
-      );
+        { timeout: 90000, polling: 1500 }
+      ).catch(() => null);
 
+      if (!formReady) {
+        this.log("Login form not found after waiting — proceeding anyway.", "warn");
+      } else {
+        this.log("Login form detected. Filling credentials...");
+      }
+
+      // Small buffer for React/Vue to finish hydrating the form
+      await new Promise((r) => setTimeout(r, 800));
+
+      // ── Find input selectors via DOM inspection ───────────────────────────────
+      const selectors = await this.page.evaluate(() => {
+        const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
+        const userInput = inputs.find(
+          (i) =>
+            i.type === "email" ||
+            i.name?.toLowerCase().includes("email") ||
+            i.name?.toLowerCase().includes("user") ||
+            i.id?.toLowerCase().includes("email") ||
+            i.id?.toLowerCase().includes("user") ||
+            i.placeholder?.toLowerCase().includes("email") ||
+            i.placeholder?.toLowerCase().includes("username")
+        );
+        const passInput = inputs.find(
+          (i) =>
+            i.type === "password" ||
+            i.name?.toLowerCase().includes("pass") ||
+            i.id?.toLowerCase().includes("pass")
+        );
+        const submitBtn = Array.from(
+          document.querySelectorAll("button, input[type=submit]")
+        ).find((b: any) => {
+          const txt = (b.textContent || b.value || "").toLowerCase();
+          return (
+            txt.includes("login") ||
+            txt.includes("sign in") ||
+            txt.includes("log in") ||
+            b.type === "submit"
+          );
+        }) as HTMLElement | undefined;
+
+        return {
+          userSel: userInput
+            ? userInput.id
+              ? `#${CSS.escape(userInput.id)}`
+              : userInput.name
+              ? `input[name="${userInput.name}"]`
+              : 'input[type="email"],input[type="text"]'
+            : 'input[type="email"],input[type="text"]',
+          passSel: passInput
+            ? passInput.id
+              ? `#${CSS.escape(passInput.id)}`
+              : passInput.name
+              ? `input[name="${passInput.name}"]`
+              : 'input[type="password"]'
+            : 'input[type="password"]',
+          submitSel: submitBtn
+            ? submitBtn.id
+              ? `#${CSS.escape(submitBtn.id)}`
+              : null
+            : null,
+        };
+      }).catch(() => ({
+        userSel: 'input[type="email"],input[type="text"]',
+        passSel: 'input[type="password"]',
+        submitSel: null,
+      }));
+
+      this.log(`Using selectors — user: ${selectors.userSel} | pass: ${selectors.passSel}`);
+
+      // ── Fill username with real keystrokes ────────────────────────────────────
+      try {
+        await this.page.click(selectors.userSel, { clickCount: 3 });
+        await this.page.keyboard.type(creds.username, { delay: 40 });
+      } catch {
+        // Fallback: direct value injection
+        await this.page.evaluate((sel: string, val: string) => {
+          const el = document.querySelector(sel) as HTMLInputElement | null;
+          if (!el) return;
+          el.focus();
+          el.value = val;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        }, selectors.userSel, creds.username);
+      }
+
+      await new Promise((r) => setTimeout(r, 300));
+
+      // ── Fill password with real keystrokes ────────────────────────────────────
+      try {
+        await this.page.click(selectors.passSel, { clickCount: 3 });
+        await this.page.keyboard.type(creds.password, { delay: 40 });
+      } catch {
+        await this.page.evaluate((sel: string, val: string) => {
+          const el = document.querySelector(sel) as HTMLInputElement | null;
+          if (!el) return;
+          el.focus();
+          el.value = val;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        }, selectors.passSel, creds.password);
+      }
+
+      await new Promise((r) => setTimeout(r, 300));
       this.log("Credentials filled. Submitting login form...");
 
-      await this.page.evaluate(() => {
-        const buttons = Array.from(
-          document.querySelectorAll("button, input[type=submit], [type=submit]")
-        );
-        const submitBtn = buttons.find(
-          (b: any) =>
-            b.textContent?.toLowerCase().includes("login") ||
-            b.textContent?.toLowerCase().includes("sign in") ||
-            b.textContent?.toLowerCase().includes("log in") ||
-            b.type === "submit"
-        ) as HTMLElement | undefined;
-        if (submitBtn) submitBtn.click();
-        else {
-          const form = document.querySelector("form");
-          if (form) form.submit();
+      // ── Submit — try button click, fall back to Enter key ────────────────────
+      if (selectors.submitSel) {
+        await this.page.click(selectors.submitSel).catch(() => {});
+      } else {
+        // Click the submit button by text, or press Enter on password field
+        const clicked = await this.page.evaluate(() => {
+          const btn = Array.from(
+            document.querySelectorAll("button, input[type=submit]")
+          ).find((b: any) => {
+            const txt = (b.textContent || b.value || "").toLowerCase();
+            return txt.includes("login") || txt.includes("sign in") || txt.includes("log in") || b.type === "submit";
+          }) as HTMLElement | undefined;
+          if (btn) { btn.click(); return true; }
+          return false;
+        });
+        if (!clicked) {
+          await this.page.keyboard.press("Enter");
         }
-      });
+      }
 
-      // Wait for either a navigation or a short timeout (SPA sites may not fire navigation events)
+      // Wait for either navigation or SPA route change
       await Promise.race([
-        this.page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 8000 }),
-        new Promise((r) => setTimeout(r, 3000)),
+        this.page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 12000 }),
+        new Promise((r) => setTimeout(r, 4000)),
       ]).catch(() => {});
 
-      // Give SPA client-side routing time to settle
+      // SPA settle time
       await new Promise((r) => setTimeout(r, 2000));
 
       const urlAfterSubmit = this.page.url();
@@ -390,7 +479,6 @@ class BotManager {
         urlAfterSubmit.toLowerCase().includes("/login");
 
       if (isStillOnLogin) {
-        // Check if login form still has error messages visible
         const hasError = await this.page.evaluate(() => {
           const body = document.body?.innerText?.toLowerCase() || "";
           return (
