@@ -1,11 +1,10 @@
 <?php
-$theme = isset($_COOKIE['afk_theme']) ? $_COOKIE['afk_theme'] : 'cyberpunk';
 $proto = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
 $host = $_SERVER['HTTP_HOST'];
 $apiBase = $proto . '://' . $host . '/api';
 ?>
 <!DOCTYPE html>
-<html lang="en" class="theme-<?php echo htmlspecialchars($theme); ?>">
+<html lang="en" class="theme-glass">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -13,7 +12,7 @@ $apiBase = $proto . '://' . $host . '/api';
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>AFK Bot — Dashboard</title>
 <link rel="stylesheet" href="/assets/base.css">
-<link rel="stylesheet" href="/assets/<?php echo htmlspecialchars($theme); ?>.css">
+<link rel="stylesheet" href="/assets/glass.css">
 <script>window.API_BASE = '<?php echo $apiBase; ?>';</script>
 </head>
 <body>

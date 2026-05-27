@@ -1,11 +1,10 @@
 <?php
-$theme = isset($_COOKIE['afk_theme']) ? $_COOKIE['afk_theme'] : 'cyberpunk';
 $proto = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
 $host = $_SERVER['HTTP_HOST'];
 $apiBase = $proto . '://' . $host . '/api';
 ?>
 <!DOCTYPE html>
-<html lang="en" class="theme-<?php echo htmlspecialchars($theme); ?>">
+<html lang="en" class="theme-glass">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -13,7 +12,7 @@ $apiBase = $proto . '://' . $host . '/api';
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>AFK Bot — Configuration</title>
 <link rel="stylesheet" href="/assets/base.css">
-<link rel="stylesheet" href="/assets/<?php echo htmlspecialchars($theme); ?>.css">
+<link rel="stylesheet" href="/assets/glass.css">
 <script>window.API_BASE = '<?php echo $apiBase; ?>';</script>
 </head>
 <body>
@@ -24,9 +23,7 @@ $apiBase = $proto . '://' . $host . '/api';
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
     </a>
     <div class="nav-title">Configuration</div>
-    <a href="/" class="nav-theme-btn" title="Change theme">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-    </a>
+    <div style="width:36px;"></div>
   </nav>
 
   <div class="page-content">
@@ -97,23 +94,6 @@ $apiBase = $proto . '://' . $host . '/api';
       <button class="btn btn-secondary btn-full" id="saveConfig">Save Settings</button>
     </div>
 
-    <!-- Theme Selection -->
-    <div class="section-card">
-      <div class="section-header">
-        <div class="section-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-        </div>
-        <div>
-          <div class="section-title">Interface Theme</div>
-          <div class="section-sub">Visual style preference</div>
-        </div>
-      </div>
-      <div class="theme-pills">
-        <a href="/?theme=cyberpunk" class="theme-pill <?php echo $theme==='cyberpunk'?'active':''; ?>">Cyberpunk</a>
-        <a href="/?theme=glass" class="theme-pill <?php echo $theme==='glass'?'active':''; ?>">Glass</a>
-        <a href="/?theme=neumorphic" class="theme-pill <?php echo $theme==='neumorphic'?'active':''; ?>">Neumorphic</a>
-      </div>
-    </div>
   </div>
 
   <!-- Bottom Nav -->
