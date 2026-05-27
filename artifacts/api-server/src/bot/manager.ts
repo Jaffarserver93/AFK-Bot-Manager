@@ -21,10 +21,11 @@ const BASE_CHROMIUM_ARGS = [
   "--disable-dev-shm-usage",
   "--disable-gpu",
   "--window-size=1280,720",
-  "--disable-background-networking",
   "--disable-default-apps",
   "--disable-sync",
   "--mute-audio",
+  // NOTE: --disable-background-networking is intentionally removed — it prevents
+  // ad scripts from loading, triggering ad-blocker detection on some sites.
 ];
 
 export interface Credentials {
@@ -75,6 +76,7 @@ class BotManager {
   private startTime: Date | null = null;
   private screenshotTimer: ReturnType<typeof setInterval> | null = null;
   private afkTimer: ReturnType<typeof setTimeout> | null = null;
+  private popupDismissTimer: ReturnType<typeof setInterval> | null = null;
   private latestScreenshot: string = "";
   private logs: LogEntry[] = [];
   private sseClients: Map<string, SSEClient> = new Map();
@@ -247,6 +249,67 @@ class BotManager {
         this.log(`Proxy auth set for user: ${proxyUser}`);
       }
 
+      // ── Inject ad-spoof script before ANY page JS runs ──────────────────────
+      // This fakes the presence of ads so the site's ad-blocker detector
+      // never triggers, regardless of what Chromium flags are active.
+      await this.page.evaluateOnNewDocument(() => {
+        // Fake Google AdSense globals
+        (window as any).adsbygoogle = (window as any).adsbygoogle || {
+          loaded: true,
+          push: () => {},
+        };
+
+        // Fake Google Publisher Tag
+        (window as any).googletag = (window as any).googletag || {
+          cmd: { push: (fn: any) => fn() },
+          pubads: () => ({
+            enableSingleRequest: () => {},
+            collapseEmptyDivs: () => {},
+            setTargeting: () => {},
+            addEventListener: () => {},
+            refresh: () => {},
+          }),
+          defineSlot: () => ({ addService: () => ({}) }),
+          enableServices: () => {},
+          display: () => {},
+          destroySlots: () => {},
+        };
+
+        // Common ad-blocker detection flags
+        (window as any).canRunAds = true;
+        (window as any).adblockDetected = false;
+        (window as any).__adblockEnabled = false;
+        (window as any).isAdBlockActive = false;
+
+        // Create a hidden fake ad element that detectors look for
+        const fakeAd = document.createElement("div");
+        fakeAd.className = "ad ads adsbox ad-unit doubleclick adsbygoogle";
+        fakeAd.id = "ad-block-test-element";
+        fakeAd.style.cssText =
+          "height:1px;width:1px;position:absolute;left:-9999px;top:-9999px;opacity:0.01;";
+        fakeAd.innerHTML = "&nbsp;";
+        document.documentElement.appendChild(fakeAd);
+
+        // Intercept setInterval/setTimeout to neutralize ad-blocker re-check timers
+        const _origSetInterval = window.setInterval;
+        (window as any).setInterval = function (fn: any, delay: any, ...args: any[]) {
+          const fnStr = typeof fn === "function" ? fn.toString() : String(fn);
+          if (
+            fnStr.includes("adblock") ||
+            fnStr.includes("adBlock") ||
+            fnStr.includes("AdBlock") ||
+            fnStr.includes("ad_block") ||
+            fnStr.includes("detectAd") ||
+            fnStr.includes("adblocker") ||
+            fnStr.includes("canRunAds")
+          ) {
+            return 0; // suppress the timer
+          }
+          return _origSetInterval(fn, delay, ...args);
+        };
+      });
+
+      this.log("Ad-spoof script injected (runs before page JS on every navigation).");
       this.log("Chromium launched successfully.");
       this.log(`Navigating to login URL: ${creds.loginUrl}`);
 
@@ -365,6 +428,7 @@ class BotManager {
 
       this.startScreenshotLoop(config.screenshotInterval);
       this.startAfkLoop();
+      this.startPopupDismissLoop();
     } catch (err: any) {
       this._status = "idle";
       this.log(`Bot failed to start: ${err.message}`, "error");
@@ -531,6 +595,15 @@ class BotManager {
     }
   }
 
+  private startPopupDismissLoop(): void {
+    if (this.popupDismissTimer) clearInterval(this.popupDismissTimer);
+    // Run every 10 seconds — catches popups re-injected by site timers
+    this.popupDismissTimer = setInterval(async () => {
+      if (this._status !== "running") return;
+      await this.dismissPopups();
+    }, 10000);
+  }
+
   private async cleanup() {
     if (this.screenshotTimer) {
       clearInterval(this.screenshotTimer);
@@ -539,6 +612,10 @@ class BotManager {
     if (this.afkTimer) {
       clearTimeout(this.afkTimer);
       this.afkTimer = null;
+    }
+    if (this.popupDismissTimer) {
+      clearInterval(this.popupDismissTimer);
+      this.popupDismissTimer = null;
     }
     if (this.browser) {
       try {
