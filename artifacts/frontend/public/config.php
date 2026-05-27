@@ -1,7 +1,5 @@
 <?php
-$proto = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-$host = $_SERVER['HTTP_HOST'];
-$apiBase = $proto . '://' . $host . '/api';
+$apiBase = '/api';
 ?>
 <!DOCTYPE html>
 <html lang="en" class="theme-glass">
