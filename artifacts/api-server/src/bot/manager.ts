@@ -1,14 +1,36 @@
-import { createRequire } from "module";
+import puppeteer from "puppeteer-core";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 import { logger } from "../lib/logger.js";
 
-const _require = createRequire(import.meta.url);
-
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const CREDENTIALS_FILE = path.join(DATA_DIR, "credentials.json");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
+
+const CHROMIUM_PATH =
+  process.env.CHROMIUM_PATH ||
+  process.env.PUPPETEER_EXECUTABLE_PATH ||
+  "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium";
+
+const CHROMIUM_ARGS = [
+  "--no-sandbox",
+  "--disable-setuid-sandbox",
+  "--disable-dev-shm-usage",
+  "--disable-gpu",
+  "--no-first-run",
+  "--no-zygote",
+  "--single-process",
+  "--disable-extensions",
+  "--disable-background-networking",
+  "--disable-default-apps",
+  "--disable-sync",
+  "--disable-translate",
+  "--hide-scrollbars",
+  "--metrics-recording-only",
+  "--mute-audio",
+  "--safebrowsing-disable-auto-update",
+];
 
 export interface Credentials {
   loginUrl: string;
@@ -38,7 +60,7 @@ class BotManager {
   private page: any = null;
   private startTime: Date | null = null;
   private screenshotTimer: ReturnType<typeof setInterval> | null = null;
-  private afkTimer: ReturnType<typeof setInterval> | null = null;
+  private afkTimer: ReturnType<typeof setTimeout> | null = null;
   private latestScreenshot: string = "";
   private logs: LogEntry[] = [];
   private sseClients: Map<string, SSEClient> = new Map();
@@ -141,59 +163,31 @@ class BotManager {
 
       if (!creds.username || !creds.password) {
         this._status = "idle";
-        throw new Error("Username and password are required. Please configure credentials first.");
+        throw new Error(
+          "Username and password are required. Please configure credentials first."
+        );
       }
 
-      this.log("Launching Chromium via puppeteer-real-browser...");
+      this.log(`Launching Chromium: ${CHROMIUM_PATH}`);
 
-      let connectFn: any;
-      try {
-        const mod = _require("puppeteer-real-browser");
-        connectFn = mod.connect;
-      } catch (err: any) {
-        this._status = "idle";
-        throw new Error(`Failed to load puppeteer-real-browser: ${err.message}`);
-      }
-
-      const chromiumPath =
-        process.env.CHROMIUM_PATH ||
-        process.env.PUPPETEER_EXECUTABLE_PATH ||
-        "/run/current-system/sw/bin/chromium" ||
-        "/usr/bin/chromium-browser" ||
-        "/usr/bin/chromium";
-
-      const result = await connectFn({
+      this.browser = await puppeteer.launch({
+        executablePath: CHROMIUM_PATH,
         headless: true,
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-gpu",
-          "--no-first-run",
-          "--no-zygote",
-          "--single-process",
-          "--disable-extensions",
-        ],
-        customConfig: {
-          executablePath: chromiumPath,
-        },
-        turnstile: false,
-        connectOption: {},
-        disableXvfb: true,
-        ignoreAllFlags: false,
+        args: CHROMIUM_ARGS,
+        timeout: 30000,
       });
 
-      this.browser = result.browser;
-      this.page = result.page;
+      this.log("Chromium launched. Opening page...");
+      this.page = await this.browser.newPage();
 
-      this.log("Chromium launched successfully.");
-
-      await new Promise((r) => setTimeout(r, 2000));
+      await this.page.setViewport({ width: 1280, height: 720 });
+      await this.page.setUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+      );
 
       this.log(`Navigating to login URL: ${creds.loginUrl}`);
-
       await this.page.goto(creds.loginUrl, {
-        waitUntil: "networkidle2",
+        waitUntil: "domcontentloaded",
         timeout: 30000,
       });
 
@@ -235,7 +229,9 @@ class BotManager {
       this.log("Credentials filled. Submitting login form...");
 
       await this.page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll("button, input[type=submit], [type=submit]"));
+        const buttons = Array.from(
+          document.querySelectorAll("button, input[type=submit], [type=submit]")
+        );
         const submitBtn = buttons.find(
           (b: any) =>
             b.textContent?.toLowerCase().includes("login") ||
@@ -250,9 +246,11 @@ class BotManager {
         }
       });
 
-      await this.page.waitForNavigation({ waitUntil: "networkidle2", timeout: 15000 }).catch(() => {
-        this.log("Navigation timeout after login — continuing anyway.", "warn");
-      });
+      await this.page
+        .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 })
+        .catch(() => {
+          this.log("Navigation timeout after login — continuing anyway.", "warn");
+        });
 
       const currentUrl = this.page.url();
       this.log(`Login submitted. Current URL: ${currentUrl}`);
@@ -261,14 +259,17 @@ class BotManager {
         currentUrl.toLowerCase().includes("login") ||
         currentUrl.toLowerCase().includes("auth")
       ) {
-        this.log("Warning: Still on login page. Credentials may be incorrect.", "warn");
+        this.log(
+          "Warning: Still on login page. Credentials may be incorrect.",
+          "warn"
+        );
       } else {
         this.log("Logged in successfully.");
       }
 
       this.log(`Navigating to target URL: ${creds.targetUrl}`);
       await this.page.goto(creds.targetUrl, {
-        waitUntil: "networkidle2",
+        waitUntil: "domcontentloaded",
         timeout: 30000,
       });
       this.log("Target URL loaded. Bot is now active.");
@@ -292,7 +293,7 @@ class BotManager {
       if (!this.page || this._status !== "running") return;
       try {
         const buffer = await this.page.screenshot({ type: "jpeg", quality: 70 });
-        this.latestScreenshot = buffer.toString("base64");
+        this.latestScreenshot = Buffer.from(buffer).toString("base64");
       } catch {
         // ignore screenshot errors
       }
@@ -302,7 +303,7 @@ class BotManager {
   }
 
   private startAfkLoop() {
-    if (this.afkTimer) clearInterval(this.afkTimer);
+    if (this.afkTimer) clearTimeout(this.afkTimer);
     const randomInterval = () => Math.floor(Math.random() * 120000) + 60000;
 
     const doAfkAction = async () => {
@@ -312,17 +313,19 @@ class BotManager {
         const x = Math.floor(Math.random() * viewport.width);
         const y = Math.floor(Math.random() * viewport.height);
         await this.page.mouse.move(x, y);
-        await this.page.evaluate(() => window.scrollBy(0, Math.random() * 100 - 50));
-        this.log(`Anti-AFK action executed (mouse moved, page scrolled).`);
+        await this.page.evaluate(() =>
+          window.scrollBy(0, Math.random() * 100 - 50)
+        );
+        this.log("Anti-AFK action executed (mouse moved, page scrolled).");
       } catch {
         this.log("Anti-AFK action failed — page may have changed.", "warn");
       }
       if (this._status === "running") {
-        this.afkTimer = setTimeout(doAfkAction, randomInterval()) as any;
+        this.afkTimer = setTimeout(doAfkAction, randomInterval());
       }
     };
 
-    this.afkTimer = setTimeout(doAfkAction, randomInterval()) as any;
+    this.afkTimer = setTimeout(doAfkAction, randomInterval());
   }
 
   async stop(): Promise<void> {
@@ -354,7 +357,7 @@ class BotManager {
       this.screenshotTimer = null;
     }
     if (this.afkTimer) {
-      clearInterval(this.afkTimer as any);
+      clearTimeout(this.afkTimer);
       this.afkTimer = null;
     }
     if (this.browser) {

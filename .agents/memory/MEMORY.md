@@ -1,0 +1,1 @@
+- [Chromium path & puppeteer setup](chromium-puppeteer.md) — puppeteer-real-browser fails in this env; use puppeteer-core with the nix store Chromium path
