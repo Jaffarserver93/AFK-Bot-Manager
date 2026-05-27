@@ -76,7 +76,7 @@ a { text-decoration: none; }
 .slider-labels { display: flex; justify-content: space-between; margin-top: 6px; font-size: 0.68rem; opacity: 0.5; }
 .input-pw-wrap { position: relative; }
 .input-pw-wrap .form-input { padding-right: 46px; }
-.pw-toggle { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); opacity: 0.5; display: flex; align-items: center; }
+.pw-toggle { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); opacity: 0.5; display: flex; align-items: center; z-index: 2; cursor: pointer; }
 .theme-pills { display: flex; gap: 8px; flex-wrap: wrap; }
 .theme-pill { padding: 8px 16px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; transition: all 0.18s; }
 

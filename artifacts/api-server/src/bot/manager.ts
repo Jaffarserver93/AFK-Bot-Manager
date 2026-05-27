@@ -187,6 +187,9 @@ class BotManager {
       this.page = result.page;
 
       this.log("Chromium launched successfully.");
+
+      await new Promise((r) => setTimeout(r, 2000));
+
       this.log(`Navigating to login URL: ${creds.loginUrl}`);
 
       await this.page.goto(creds.loginUrl, {
