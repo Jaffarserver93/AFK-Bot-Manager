@@ -787,13 +787,13 @@ class BotManager {
         return;
       }
 
-      // Parse time — format is MM:SS (e.g. "28:00" = 28 min, "00:52" = 52 sec)
+      // Parse time — format is HH:MM (e.g. "00:52" = 52 min, "01:30" = 90 min)
       this._timeRemaining = clockTime;
       const parts = clockTime.split(":").map(Number);
       let totalMinutes = 0;
       if (parts.length === 2) {
-        // MM:SS
-        totalMinutes = parts[0] + (parts[1] > 0 ? 1 : 0); // round up seconds to next min
+        // HH:MM
+        totalMinutes = parts[0] * 60 + parts[1];
       } else if (parts.length === 3) {
         // HH:MM:SS
         totalMinutes = parts[0] * 60 + parts[1];
