@@ -61,6 +61,24 @@ router.get("/bot/screenshot", (_req: Request, res: Response): void => {
   res.send(buf);
 });
 
+router.get("/bot/page-status", async (_req: Request, res: Response): Promise<void> => {
+  const status = await botManager.getPageStatus();
+  const elapsed = botManager._reloadLoopStartedAt
+    ? Math.floor((Date.now() - botManager._reloadLoopStartedAt) / 1000)
+    : null;
+  const nextReloadIn = elapsed !== null ? Math.max(0, 60 - elapsed) : null;
+  res.json({ ...status, botStatus: botManager.status, nextReloadIn });
+});
+
+router.post("/bot/go-to-target", async (_req: Request, res: Response): Promise<void> => {
+  try {
+    await botManager.navigateToTarget();
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
 router.get("/bot/logs/stream", (req: Request, res: Response): void => {
   const clientId = `${Date.now()}-${Math.random()}`;
   res.set({

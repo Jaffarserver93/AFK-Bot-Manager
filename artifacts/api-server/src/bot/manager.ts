@@ -84,6 +84,8 @@ class BotManager {
   private logs: LogEntry[] = [];
   private sseClients: Map<string, SSEClient> = new Map();
   private _status: "idle" | "starting" | "running" | "stopping" = "idle";
+  public _reloadLoopStartedAt: number = 0;
+  public reloadIntervalMs: number = 60000;
 
   get status() {
     return this._status;
@@ -151,7 +153,7 @@ class BotManager {
     if (!existsSync(CREDENTIALS_FILE)) {
       return {
         loginUrl: "https://www.bytenut.com/auth/login",
-        targetUrl: "https://www.bytenut.com/free-gamepanel/d80e14ab",
+        targetUrl: "https://www.bytenut.com/free-gamepanel/317333e3",
         username: "",
         password: "",
       };
@@ -704,13 +706,69 @@ class BotManager {
     }, 10000);
   }
 
+  getCurrentUrl(): string {
+    if (!this.page) return "";
+    try {
+      return this.page.url() || "";
+    } catch {
+      return "";
+    }
+  }
+
+  async getPageStatus(): Promise<{ currentUrl: string; targetUrl: string; onTarget: boolean }> {
+    const creds = await this.readCredentials();
+    const currentUrl = this.getCurrentUrl();
+    const target = creds.targetUrl || "";
+    const onTarget = !!currentUrl && !!target && currentUrl.replace(/\/$/, "") === target.replace(/\/$/, "");
+    return { currentUrl, targetUrl: target, onTarget };
+  }
+
+  async navigateToTarget(): Promise<void> {
+    if (!this.page || this._status !== "running") return;
+    const creds = await this.readCredentials();
+    if (!creds.targetUrl) return;
+    this.log(`Navigating to target URL: ${creds.targetUrl}`);
+    await this.page.goto(creds.targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await this.dismissPopups();
+    this.log("Navigated to target URL successfully.");
+  }
+
   private startReloadLoop(): void {
     if (this.reloadTimer) clearInterval(this.reloadTimer);
     let reloadCount = 0;
+    this._reloadLoopStartedAt = Date.now();
 
     this.reloadTimer = setInterval(async () => {
       if (!this.page || this._status !== "running") return;
       reloadCount++;
+      this._reloadLoopStartedAt = Date.now();
+
+      // Check if we are still on the target page — if not, navigate there instead of reloading
+      let currentUrl = "";
+      try { currentUrl = this.page.url() || ""; } catch { /**/ }
+      const creds = await this.readCredentials().catch(() => null);
+      const targetUrl = creds?.targetUrl || "";
+
+      const onTarget =
+        !!currentUrl &&
+        !!targetUrl &&
+        currentUrl.replace(/\/$/, "") === targetUrl.replace(/\/$/, "");
+
+      if (!onTarget && targetUrl) {
+        this.log(
+          `Reload cycle ${reloadCount}: bot is on "${currentUrl}" — not the target page. Navigating to target...`,
+          "warn"
+        );
+        try {
+          await this.page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+          await this.dismissPopups();
+          this.log(`Navigated to target URL (cycle ${reloadCount}).`);
+        } catch (err: any) {
+          this.log(`Failed to navigate to target (cycle ${reloadCount}): ${err.message}`, "warn");
+        }
+        return;
+      }
+
       this.log(`Reloading page (cycle ${reloadCount})...`);
       try {
         await this.page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });

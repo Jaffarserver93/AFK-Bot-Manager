@@ -24,6 +24,47 @@
   <div class="page-content">
     <div id="toast" class="toast" style="display:none;"></div>
 
+    <!-- Page Monitor -->
+    <div class="section-card" id="pageMonitorCard">
+      <div class="section-header">
+        <div class="section-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/></svg>
+        </div>
+        <div style="flex:1">
+          <div class="section-title">Page Monitor</div>
+          <div class="section-sub">Current bot page vs target</div>
+        </div>
+        <div id="pageMatchBadge" style="padding:4px 10px;border-radius:20px;font-size:0.72rem;font-weight:600;background:rgba(100,100,100,0.2);color:#aaa;border:1px solid rgba(100,100,100,0.3);">—</div>
+      </div>
+
+      <div style="margin-bottom:10px;">
+        <div class="form-label" style="margin-bottom:4px;">Target URL</div>
+        <div id="monitorTargetUrl" style="font-size:0.78rem;color:#7dd3fc;word-break:break-all;padding:6px 10px;background:rgba(125,211,252,0.06);border-radius:6px;border:1px solid rgba(125,211,252,0.15);">—</div>
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <div class="form-label" style="margin-bottom:4px;">Current Bot URL</div>
+        <div id="monitorCurrentUrl" style="font-size:0.78rem;color:#e2e8f0;word-break:break-all;padding:6px 10px;background:rgba(255,255,255,0.04);border-radius:6px;border:1px solid rgba(255,255,255,0.08);">Bot not running</div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+        <div style="flex:1">
+          <div class="form-label" style="margin-bottom:4px;">Next reload in</div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div id="reloadCountdown" style="font-size:1.3rem;font-weight:700;color:#a78bfa;font-variant-numeric:tabular-nums;">—</div>
+            <div style="font-size:0.75rem;color:#64748b;">seconds</div>
+          </div>
+          <div style="height:4px;background:rgba(255,255,255,0.08);border-radius:2px;margin-top:6px;overflow:hidden;">
+            <div id="reloadProgress" style="height:100%;background:linear-gradient(90deg,#7c3aed,#a78bfa);border-radius:2px;width:0%;transition:width 1s linear;"></div>
+          </div>
+        </div>
+        <button id="goToTargetBtn" class="btn btn-secondary" style="white-space:nowrap;padding:8px 14px;" disabled>
+          Go to Target
+        </button>
+      </div>
+      <div id="monitorStatus" style="font-size:0.75rem;color:#64748b;text-align:center;">Polling every 3 seconds...</div>
+    </div>
+
     <!-- Login Section -->
     <div class="section-card">
       <div class="section-header">
@@ -333,6 +374,108 @@ document.getElementById('saveProxy').addEventListener('click', async function() 
 
 loadCredentials();
 loadConfig();
+
+// ── Page Monitor ──────────────────────────────────────────────────────────────
+let _monitorCountdown = null;
+let _lastNextReloadIn = null;
+
+async function pollPageStatus() {
+  try {
+    const r = await fetch(API + '/bot/page-status');
+    if (!r.ok) return;
+    const d = await r.json();
+
+    // Target URL display
+    document.getElementById('monitorTargetUrl').textContent = d.targetUrl || '(not set)';
+
+    // Current URL display
+    const curEl = document.getElementById('monitorCurrentUrl');
+    if (d.botStatus === 'idle') {
+      curEl.textContent = 'Bot not running';
+      curEl.style.color = '#64748b';
+    } else {
+      curEl.textContent = d.currentUrl || '(navigating...)';
+      curEl.style.color = d.onTarget ? '#4ade80' : '#f87171';
+    }
+
+    // Match badge
+    const badge = document.getElementById('pageMatchBadge');
+    if (d.botStatus === 'idle') {
+      badge.textContent = 'IDLE';
+      badge.style.background = 'rgba(100,100,100,0.2)';
+      badge.style.color = '#aaa';
+      badge.style.border = '1px solid rgba(100,100,100,0.3)';
+    } else if (d.onTarget) {
+      badge.textContent = 'ON TARGET';
+      badge.style.background = 'rgba(34,197,94,0.15)';
+      badge.style.color = '#22c55e';
+      badge.style.border = '1px solid rgba(34,197,94,0.3)';
+    } else {
+      badge.textContent = 'OFF TARGET';
+      badge.style.background = 'rgba(239,68,68,0.15)';
+      badge.style.color = '#ef4444';
+      badge.style.border = '1px solid rgba(239,68,68,0.3)';
+    }
+
+    // Go to Target button
+    const goBtn = document.getElementById('goToTargetBtn');
+    goBtn.disabled = d.botStatus !== 'running';
+
+    // Countdown
+    if (d.nextReloadIn !== null && d.nextReloadIn !== undefined && d.botStatus === 'running') {
+      _lastNextReloadIn = d.nextReloadIn;
+      startLocalCountdown(d.nextReloadIn);
+    } else {
+      document.getElementById('reloadCountdown').textContent = '—';
+      document.getElementById('reloadProgress').style.width = '0%';
+      if (_monitorCountdown) { clearInterval(_monitorCountdown); _monitorCountdown = null; }
+    }
+
+    document.getElementById('monitorStatus').textContent = 'Last polled: ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    document.getElementById('monitorStatus').textContent = 'Poll error — retrying...';
+  }
+}
+
+function startLocalCountdown(seconds) {
+  if (_monitorCountdown) { clearInterval(_monitorCountdown); _monitorCountdown = null; }
+  let s = seconds;
+  const tick = () => {
+    const el = document.getElementById('reloadCountdown');
+    const bar = document.getElementById('reloadProgress');
+    if (!el) return;
+    el.textContent = Math.max(0, s);
+    const pct = Math.min(100, ((60 - s) / 60) * 100);
+    bar.style.width = pct + '%';
+    if (s <= 0) { clearInterval(_monitorCountdown); _monitorCountdown = null; return; }
+    s--;
+  };
+  tick();
+  _monitorCountdown = setInterval(tick, 1000);
+}
+
+document.getElementById('goToTargetBtn').addEventListener('click', async function() {
+  const btn = this;
+  btn.disabled = true;
+  btn.textContent = 'Navigating...';
+  try {
+    const r = await fetch(API + '/bot/go-to-target', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      showToast('Bot navigated to target page!', true);
+      setTimeout(pollPageStatus, 1500);
+    } else {
+      showToast('Failed: ' + (d.error || 'unknown error'), false);
+    }
+  } catch(e) {
+    showToast('Network error.', false);
+  }
+  btn.disabled = false;
+  btn.textContent = 'Go to Target';
+});
+
+pollPageStatus();
+setInterval(pollPageStatus, 3000);
 </script>
 </body>
 </html>
