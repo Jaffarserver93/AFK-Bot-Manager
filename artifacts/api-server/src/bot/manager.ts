@@ -86,6 +86,9 @@ class BotManager {
   private _status: "idle" | "starting" | "running" | "stopping" = "idle";
   public _reloadLoopStartedAt: number = 0;
   public reloadIntervalMs: number = 60000;
+  private _lastHealthyAt: number = 0;
+  private _healthWatchdog: ReturnType<typeof setInterval> | null = null;
+  private _autoRestartCount: number = 0;
 
   get status() {
     return this._status;
@@ -527,10 +530,12 @@ class BotManager {
       this._status = "running";
       this.startTime = new Date();
 
+      this._lastHealthyAt = Date.now();
       this.startScreenshotLoop(config.screenshotInterval);
       this.startAfkLoop();
       this.startPopupDismissLoop();
       this.startReloadLoop();
+      this.startHealthWatchdog();
     } catch (err: any) {
       this._status = "idle";
       this.log(`Bot failed to start: ${err.message}`, "error");
@@ -629,12 +634,9 @@ class BotManager {
       try {
         const buffer = await this.page.screenshot({ type: "jpeg", quality: 70 });
         this.latestScreenshot = Buffer.from(buffer).toString("base64");
-      } catch (err: any) {
-        if (this.isDetachedError(err)) {
-          // silently attempt recovery — the reload loop will log and navigate
-          await this.recoverPage().catch(() => {});
-        }
-        // ignore other screenshot errors (transient)
+        this._lastHealthyAt = Date.now(); // mark page is alive
+      } catch {
+        // ignore — detached frame / transient errors are handled by reload + watchdog
       }
     };
     captureScreenshot();
@@ -660,6 +662,7 @@ class BotManager {
         await this.page.evaluate(() =>
           window.scrollBy(0, Math.random() * 100 - 50)
         );
+        this._lastHealthyAt = Date.now();
         this.log("Anti-AFK action executed (mouse moved, page scrolled).");
       } catch (err: any) {
         if (this.isDetachedError(err)) {
@@ -714,6 +717,32 @@ class BotManager {
     if (this._status === "running") {
       this.startScreenshotLoop(ms);
     }
+  }
+
+  private startHealthWatchdog(): void {
+    if (this._healthWatchdog) clearInterval(this._healthWatchdog);
+    const STUCK_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+
+    this._healthWatchdog = setInterval(async () => {
+      if (this._status !== "running") return;
+
+      const stuckMs = Date.now() - this._lastHealthyAt;
+      if (stuckMs < STUCK_THRESHOLD_MS) return;
+
+      const stuckMin = Math.floor(stuckMs / 60000);
+      this._autoRestartCount++;
+      this.log(
+        `⚠ Bot has been unresponsive for ${stuckMin} min — triggering auto-restart #${this._autoRestartCount}...`,
+        "error"
+      );
+
+      try {
+        // Use restart() directly — it stops, cleans up, and re-launches
+        await this.restart();
+      } catch (err: any) {
+        this.log(`Auto-restart #${this._autoRestartCount} failed: ${err.message}`, "error");
+      }
+    }, 60000); // check every minute
   }
 
   private startPopupDismissLoop(): void {
@@ -856,6 +885,7 @@ class BotManager {
         await new Promise((r) => setTimeout(r, 800));
 
         this.log(`Page ready (cycle ${reloadCount}). Checking server status...`);
+        this._lastHealthyAt = Date.now();
         await this.checkAndRenewServer();
         await this.checkServerPaused();
       } catch (err: any) {
@@ -1104,6 +1134,10 @@ class BotManager {
   }
 
   private async cleanup() {
+    if (this._healthWatchdog) {
+      clearInterval(this._healthWatchdog);
+      this._healthWatchdog = null;
+    }
     if (this.screenshotTimer) {
       clearInterval(this.screenshotTimer);
       this.screenshotTimer = null;
