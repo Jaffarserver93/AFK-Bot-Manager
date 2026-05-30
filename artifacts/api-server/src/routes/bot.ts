@@ -17,6 +17,7 @@ router.get("/bot/status", async (_req: Request, res: Response): Promise<void> =>
     timeRemaining: botManager.timeRemaining,
     timeRemainingMinutes: botManager.timeRemainingMinutes,
     autoRestartCount: botManager._autoRestartCount,
+    lastHealthyAt: botManager._lastHealthyAt || null,
     logs: botManager.getLogs().slice(-50),
   });
 });

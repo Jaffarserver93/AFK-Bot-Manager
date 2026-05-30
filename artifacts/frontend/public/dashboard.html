@@ -40,6 +40,18 @@
         </div>
         <div id="timeRemainingBadge" style="padding:4px 10px; border-radius:20px; font-size:0.75rem; font-weight:600; background:rgba(34,197,94,0.15); color:#22c55e; border:1px solid rgba(34,197,94,0.3); display:flex; align-items:center;">OK</div>
       </div>
+      <div id="healthRow" style="display:none; margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.08); gap:8px; flex-wrap:wrap;">
+        <div style="display:flex; justify-content:space-between; align-items:center; width:100%; gap:8px;">
+          <div class="status-info">
+            <div class="status-label">Last Healthy</div>
+            <div id="lastHealthyText" style="font-size:0.9rem; font-weight:600; color:#94a3b8;">—</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div class="status-label" style="text-align:right;">Auto-Restarts</div>
+            <div id="autoRestartBadge" style="padding:4px 12px; border-radius:20px; font-size:0.85rem; font-weight:700; background:rgba(34,197,94,0.15); color:#22c55e; border:1px solid rgba(34,197,94,0.3); min-width:32px; text-align:center;">0</div>
+          </div>
+        </div>
+      </div>
       <div class="action-buttons">
         <button class="btn btn-action" id="toggleBtn">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" id="toggleIcon"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -117,7 +129,58 @@ async function pollStatus() {
     if (d.timeRemaining && d.timeRemaining !== '--:--') {
       updateTimeRemaining(d.timeRemaining, d.timeRemainingMinutes ?? -1);
     }
+    updateHealthRow(d.status, d.autoRestartCount ?? 0, d.lastHealthyAt ?? null);
   } catch(e) {}
+}
+
+function timeAgo(tsMs) {
+  if (!tsMs) return '—';
+  const secs = Math.floor((Date.now() - tsMs) / 1000);
+  if (secs < 5)  return 'Just now';
+  if (secs < 60) return secs + 's ago';
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return mins + 'm ago';
+  return Math.floor(mins / 60) + 'h ago';
+}
+
+function updateHealthRow(status, restartCount, lastHealthyAt) {
+  const row = document.getElementById('healthRow');
+  const lastHealthyEl = document.getElementById('lastHealthyText');
+  const badge = document.getElementById('autoRestartBadge');
+  if (!row || !lastHealthyEl || !badge) return;
+
+  if (status === 'idle') {
+    row.style.display = 'none';
+    return;
+  }
+  row.style.display = 'flex';
+
+  // Last healthy
+  lastHealthyEl.textContent = timeAgo(lastHealthyAt);
+  const stuckSecs = lastHealthyAt ? Math.floor((Date.now() - lastHealthyAt) / 1000) : 9999;
+  if (stuckSecs > 120) {
+    lastHealthyEl.style.color = '#f87171'; // red if >2 min stale
+  } else if (stuckSecs > 30) {
+    lastHealthyEl.style.color = '#fbbf24'; // amber if >30s
+  } else {
+    lastHealthyEl.style.color = '#4ade80'; // green
+  }
+
+  // Auto-restart badge
+  badge.textContent = restartCount;
+  if (restartCount === 0) {
+    badge.style.background = 'rgba(34,197,94,0.15)';
+    badge.style.color = '#22c55e';
+    badge.style.border = '1px solid rgba(34,197,94,0.3)';
+  } else if (restartCount <= 3) {
+    badge.style.background = 'rgba(251,191,36,0.15)';
+    badge.style.color = '#fbbf24';
+    badge.style.border = '1px solid rgba(251,191,36,0.3)';
+  } else {
+    badge.style.background = 'rgba(239,68,68,0.15)';
+    badge.style.color = '#ef4444';
+    badge.style.border = '1px solid rgba(239,68,68,0.3)';
+  }
 }
 
 function updateTimeRemaining(tr, trMin) {
