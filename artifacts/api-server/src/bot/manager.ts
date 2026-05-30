@@ -629,8 +629,12 @@ class BotManager {
       try {
         const buffer = await this.page.screenshot({ type: "jpeg", quality: 70 });
         this.latestScreenshot = Buffer.from(buffer).toString("base64");
-      } catch {
-        // ignore screenshot errors
+      } catch (err: any) {
+        if (this.isDetachedError(err)) {
+          // silently attempt recovery — the reload loop will log and navigate
+          await this.recoverPage().catch(() => {});
+        }
+        // ignore other screenshot errors (transient)
       }
     };
     captureScreenshot();
@@ -657,8 +661,23 @@ class BotManager {
           window.scrollBy(0, Math.random() * 100 - 50)
         );
         this.log("Anti-AFK action executed (mouse moved, page scrolled).");
-      } catch {
-        this.log("Anti-AFK action failed — page may have changed.", "warn");
+      } catch (err: any) {
+        if (this.isDetachedError(err)) {
+          this.log("Anti-AFK: frame detached — recovering page...", "warn");
+          const recovered = await this.recoverPage();
+          if (recovered) {
+            const creds = await this.readCredentials().catch(() => null);
+            if (creds?.targetUrl) {
+              try {
+                await this.page!.goto(creds.targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+                await this.dismissPopups();
+                this.log("Anti-AFK: recovered and back on target page.");
+              } catch { /**/ }
+            }
+          }
+        } else {
+          this.log("Anti-AFK action failed — page may have changed.", "warn");
+        }
       }
 
       // Dismiss popups every 3 AFK cycles (~3–6 min)
@@ -704,6 +723,51 @@ class BotManager {
       if (this._status !== "running") return;
       await this.dismissPopups();
     }, 10000);
+  }
+
+  private isDetachedError(err: any): boolean {
+    const msg: string = err?.message || "";
+    return (
+      msg.includes("detached Frame") ||
+      msg.includes("detached") ||
+      msg.includes("Target closed") ||
+      msg.includes("Session closed") ||
+      msg.includes("Protocol error") ||
+      msg.includes("context was destroyed") ||
+      msg.includes("Execution context was destroyed")
+    );
+  }
+
+  private async recoverPage(): Promise<boolean> {
+    if (!this.browser) return false;
+    try {
+      const pages: any[] = await this.browser.pages();
+      if (!pages || pages.length === 0) {
+        this.log("Recovery: no open pages found in browser.", "warn");
+        return false;
+      }
+      // Prefer the page with the target URL, else take the last open page
+      const creds = await this.readCredentials().catch(() => null);
+      const targetUrl = creds?.targetUrl || "";
+      let best: any = null;
+      for (const p of pages) {
+        try {
+          const url = p.url() || "";
+          if (targetUrl && url.includes(targetUrl.replace(/^https?:\/\//, "").split("/")[0])) {
+            best = p;
+            break;
+          }
+          best = p; // fallback: last page wins
+        } catch { /**/ }
+      }
+      if (!best) return false;
+      this.page = best;
+      this.log("Page recovered from browser session.", "warn");
+      return true;
+    } catch (err: any) {
+      this.log(`recoverPage failed: ${err.message}`, "warn");
+      return false;
+    }
   }
 
   getCurrentUrl(): string {
@@ -795,7 +859,30 @@ class BotManager {
         await this.checkAndRenewServer();
         await this.checkServerPaused();
       } catch (err: any) {
-        this.log(`Page reload failed (cycle ${reloadCount}): ${err.message}`, "warn");
+        if (this.isDetachedError(err)) {
+          this.log(
+            `Reload cycle ${reloadCount}: page frame detached — attempting recovery...`,
+            "warn"
+          );
+          const recovered = await this.recoverPage();
+          if (recovered && targetUrl) {
+            this.log(`Recovery succeeded. Navigating to target URL...`);
+            try {
+              await this.page!.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+              await this.dismissPopups();
+              this.log(`Back on target URL after recovery (cycle ${reloadCount}).`);
+            } catch (navErr: any) {
+              this.log(`Navigation after recovery failed: ${navErr.message}`, "warn");
+            }
+          } else if (!recovered) {
+            this.log(
+              "Recovery failed — no live page found. Bot may need a restart.",
+              "error"
+            );
+          }
+        } else {
+          this.log(`Page reload failed (cycle ${reloadCount}): ${err.message}`, "warn");
+        }
       }
     }, 60000);
   }
