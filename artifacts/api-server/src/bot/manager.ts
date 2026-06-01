@@ -505,75 +505,78 @@ class BotManager {
     }
 
     // ── Wait for SPA to actually authenticate ─────────────────────────────────
-    // Poll until URL changes away from login OR authenticated content appears.
-    // This prevents the black screen caused by navigating to target before
-    // the session cookie/token has been set.
+    // Only trust a URL change away from the login page — body-text checks are
+    // unreliable because bytenut's nav renders "game panel" / "free server"
+    // text on every page (including the login page), which caused false positives.
     this.log("Waiting for authentication to complete...");
     const authenticated = await this.page.waitForFunction(
-      (loginUrl: string) => {
+      () => {
         const url = window.location.href.toLowerCase();
-        const onLogin = url.includes("/auth/login") || url.includes("/login");
-        if (!onLogin) return true;
-        // Still on login — check if body content suggests we're logged in
-        // (some SPAs change content without a URL change)
-        const body = document.body?.innerText?.toLowerCase() || "";
-        return (
-          body.includes("dashboard") ||
-          body.includes("game panel") ||
-          body.includes("free server") ||
-          body.includes("renew server")
-        );
+        return !url.includes("/auth/login") && !url.includes("/login");
       },
-      { timeout: 30000, polling: 800 },
-      creds.loginUrl
+      { timeout: 20000, polling: 800 }
     ).catch(() => null);
 
     const urlAfterLogin = this.page.url();
     this.log(`Login submitted — URL: ${urlAfterLogin}`);
 
     if (!authenticated) {
-      // Check if the page has an error message
+      // URL didn't change — check for an explicit error message before giving up
       const hasError = await this.page.evaluate(() => {
         const body = document.body?.innerText?.toLowerCase() || "";
         return (
           body.includes("invalid") ||
           body.includes("incorrect") ||
           body.includes("wrong password") ||
-          body.includes("error")
+          body.includes("credentials")
         );
       }).catch(() => false);
 
       if (hasError) {
-        this.log("Login failed — invalid credentials.", "error");
+        this.log("Login failed — invalid credentials reported by site.", "error");
         return false;
       }
-      // SPA routing — URL didn't change but login may still have worked
-      this.log("Login submitted — URL unchanged (SPA routing, this is normal).");
+
+      // URL unchanged but no error shown — SPA may use cookie/token without redirect.
+      // Proceed and let the target-URL navigation validate the session.
+      this.log("Login submitted — URL unchanged after 20 s. Proceeding to target to verify session...", "warn");
     } else {
-      this.log("Authentication confirmed. Navigating to target URL...");
+      this.log("Authentication confirmed (URL left login page). Navigating to target URL...");
     }
 
-    // Extra settle time so the session token is stored before we navigate
-    await new Promise((r) => setTimeout(r, 2000));
+    // Extra settle time so the session cookie/token is written before we navigate
+    await new Promise((r) => setTimeout(r, 3000));
 
     this.log(`Navigating to target URL: ${creds.targetUrl}`);
     await this.page.goto(creds.targetUrl, {
       waitUntil: "domcontentloaded",
-      timeout: 30000,
+      timeout: 90000,
     });
 
     await this.dismissPopups();
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 1500));
     await this.dismissPopups();
 
     // Verify we actually landed on the target (not bounced back to login)
     const finalUrl = this.page.url();
     if (this.isOnLoginPage(finalUrl)) {
-      this.log(
-        `Target navigation bounced back to login page — authentication may have failed. URL: ${finalUrl}`,
-        "warn"
-      );
-      return false;
+      // One retry: wait an extra 5 s (session cookie may still be propagating) then re-navigate
+      this.log("Target bounced to login page — waiting 5 s and retrying navigation...", "warn");
+      await new Promise((r) => setTimeout(r, 5000));
+      await this.page.goto(creds.targetUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 90000,
+      }).catch(() => {});
+      await this.dismissPopups();
+      const retryUrl = this.page.url();
+      if (this.isOnLoginPage(retryUrl)) {
+        this.log(
+          `Target still redirects to login after retry — authentication failed. URL: ${retryUrl}`,
+          "error"
+        );
+        return false;
+      }
+      this.log(`Retry navigation succeeded. URL: ${retryUrl}`);
     }
 
     return true;
