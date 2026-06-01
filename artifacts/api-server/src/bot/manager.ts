@@ -89,6 +89,8 @@ class BotManager {
   private _lastHealthyAt: number = 0;
   private _healthWatchdog: ReturnType<typeof setInterval> | null = null;
   private _autoRestartCount: number = 0;
+  private _loginWatchdog: ReturnType<typeof setInterval> | null = null;
+  private _reloginInProgress: boolean = false;
 
   get status() {
     return this._status;
@@ -343,6 +345,7 @@ class BotManager {
       this.startPopupDismissLoop();
       this.startReloadLoop();
       this.startHealthWatchdog();
+      this.startLoginPageWatchdog();
     } catch (err: any) {
       this._status = "idle";
       this.log(`Bot failed to start: ${err.message}`, "error");
@@ -816,6 +819,47 @@ class BotManager {
     }, 10000);
   }
 
+  /**
+   * Checks every 15 seconds whether the bot has been redirected to the login
+   * page (e.g. session expired). If so, immediately re-authenticates and
+   * navigates back to the target URL — without waiting for the slower reload cycle.
+   */
+  private startLoginPageWatchdog(): void {
+    if (this._loginWatchdog) clearInterval(this._loginWatchdog);
+
+    this._loginWatchdog = setInterval(async () => {
+      if (this._status !== "running" || this._reloginInProgress) return;
+      if (!this.page) return;
+
+      let currentUrl = "";
+      try { currentUrl = this.page.url() || ""; } catch { return; }
+
+      if (!this.isOnLoginPage(currentUrl)) return;
+
+      // We're on the login page while the bot is supposed to be running
+      this._reloginInProgress = true;
+      this.log(
+        `⚠ Login page detected while bot is running (URL: ${currentUrl}) — re-authenticating...`,
+        "warn"
+      );
+
+      try {
+        const creds = await this.readCredentials();
+        const loginOk = await this.performLogin(creds);
+        if (loginOk) {
+          this.log("Re-authentication successful — bot is back on the target page.");
+          this._lastHealthyAt = Date.now();
+        } else {
+          this.log("Re-authentication failed — will retry on next check.", "error");
+        }
+      } catch (err: any) {
+        this.log(`Re-authentication error: ${err.message}`, "error");
+      } finally {
+        this._reloginInProgress = false;
+      }
+    }, 15000);
+  }
+
   private isDetachedError(err: any): boolean {
     const msg: string = err?.message || "";
     return (
@@ -1218,6 +1262,11 @@ class BotManager {
   }
 
   private async cleanup() {
+    if (this._loginWatchdog) {
+      clearInterval(this._loginWatchdog);
+      this._loginWatchdog = null;
+    }
+    this._reloginInProgress = false;
     if (this._healthWatchdog) {
       clearInterval(this._healthWatchdog);
       this._healthWatchdog = null;
