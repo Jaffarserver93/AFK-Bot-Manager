@@ -485,23 +485,47 @@ class BotManager {
     await new Promise((r) => setTimeout(r, 300));
     this.log("Credentials filled. Submitting login form...");
 
-    // Submit — try button click, fall back to Enter key
+    // Submit — use page.click() with real pointer events (React/Vue ignore DOM .click())
+    // Try progressively broader selectors until one works, then fall back to Enter.
+    this.log("Submitting login form...");
+    let submitted = false;
+
+    // 1. If we captured a specific selector from DOM inspection, try it first
     if (selectors.submitSel) {
-      await this.page.click(selectors.submitSel).catch(() => {});
-    } else {
-      const clicked = await this.page.evaluate(() => {
-        const btn = Array.from(
-          document.querySelectorAll("button, input[type=submit]")
-        ).find((b: any) => {
-          const txt = (b.textContent || b.value || "").toLowerCase();
-          return txt.includes("login") || txt.includes("sign in") || txt.includes("log in") || b.type === "submit";
-        }) as HTMLElement | undefined;
-        if (btn) { btn.click(); return true; }
-        return false;
-      });
-      if (!clicked) {
-        await this.page.keyboard.press("Enter");
-      }
+      submitted = await this.page.click(selectors.submitSel).then(() => true).catch(() => false);
+    }
+
+    // 2. button[type="submit"] — most reliable for standard forms
+    if (!submitted) {
+      submitted = await this.page.click('button[type="submit"]').then(() => true).catch(() => false);
+      if (submitted) this.log('Submitted via button[type="submit"]');
+    }
+
+    // 3. input[type="submit"]
+    if (!submitted) {
+      submitted = await this.page.click('input[type="submit"]').then(() => true).catch(() => false);
+      if (submitted) this.log('Submitted via input[type="submit"]');
+    }
+
+    // 4. XPath — find a button whose visible text contains "sign in" or "log in"
+    if (!submitted) {
+      try {
+        const [btnHandle] = await (this.page as any).$x(
+          '//button[contains(translate(normalize-space(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "sign in") or contains(translate(normalize-space(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "log in") or contains(translate(normalize-space(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "login")]'
+        );
+        if (btnHandle) {
+          await btnHandle.click();
+          submitted = true;
+          this.log("Submitted via XPath text search on button");
+        }
+      } catch { /* ignore */ }
+    }
+
+    // 5. Last resort — press Enter on the password field
+    if (!submitted) {
+      this.log("No submit button found — pressing Enter", "warn");
+      await this.page.focus(selectors.passSel).catch(() => {});
+      await this.page.keyboard.press("Enter");
     }
 
     // ── Wait for SPA to actually authenticate ─────────────────────────────────
