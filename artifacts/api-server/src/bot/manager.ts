@@ -946,57 +946,13 @@ class BotManager {
       // If under 28 minutes (INCLUDING 0 = expired), click the Extend button
       // directly from the open modal — do NOT close it first.
       if (totalMinutes < 28) {
-        this.log(
-          `⚠ Only ${totalMinutes} min left — scrolling to Cloudflare widget before extending...`,
-          "warn"
-        );
-
-        // Scroll to the Cloudflare verification widget inside the modal and wait
-        // for it to auto-verify before clicking Extend (required by the site).
-        await this.page.evaluate(() => {
-          const cfEl =
-            document.querySelector("iframe[src*='challenges.cloudflare']") ||
-            document.querySelector(".cf-turnstile") ||
-            document.querySelector("[class*='turnstile']") ||
-            document.querySelector("[id*='turnstile']") ||
-            document.querySelector(".expired-warning-banner");
-          if (cfEl) {
-            cfEl.scrollIntoView({ behavior: "smooth", block: "center" });
-          } else {
-            window.scrollBy(0, 300);
-          }
-        });
-
-        this.log("Waiting 5s for Cloudflare auto-verification inside modal...");
-        await new Promise((r) => setTimeout(r, 5000));
-
-        this.log(`Clicking "Extend Server Time +60 min"...`);
-        const clicked = await this.page.evaluate(() => {
-          const allButtons = Array.from(
-            document.querySelectorAll("button, a")
-          ) as HTMLElement[];
-          // Prefer the specific "+60 min" / "Extend Server Time" button first
-          const extendBtn =
-            allButtons.find((b) => {
-              const txt = (b.textContent || "").toLowerCase().trim();
-              return txt.includes("extend") && (txt.includes("60") || txt.includes("server time"));
-            }) ||
-            allButtons.find((b) => {
-              const txt = (b.textContent || "").toLowerCase().trim();
-              return txt.includes("extend") && !txt.includes("renew server");
-            });
-          if (extendBtn) {
-            extendBtn.scrollIntoView({ behavior: "smooth", block: "center" });
-            extendBtn.click();
-            return extendBtn.textContent?.trim() || "button";
-          }
-          return null;
-        });
-
-        if (clicked) {
-          this.log(`Extend button clicked ("${clicked}"). Waiting for confirmation...`);
-          await new Promise((r) => setTimeout(r, 4000));
+        this.log(`⚠ Only ${totalMinutes} min left — preparing to extend...`, "warn");
+        const extended = await this.clickExtendButton();
+        if (extended === "cooldown") {
+          this.log("Extend button is on cooldown — closing modal.");
           await this.page.keyboard.press("Escape").catch(() => {});
+          return false;
+        } else if (extended === "clicked") {
           return true; // signal that we handled the extend — skip checkServerPaused
         } else {
           this.log("Extend button not found in modal — closing modal.", "warn");
@@ -1016,55 +972,176 @@ class BotManager {
     }
   }
 
-  private async triggerRenewalFlow(): Promise<void> {
-    if (!this.page) return;
-    try {
-      // Scroll to Cloudflare verification widget
+  /**
+   * Unified extend-button handler used by all renewal paths.
+   *
+   * Strategy:
+   *  1. Inspect the Turnstile widget state inside the modal/page.
+   *     - If the script FAILED to load → skip waiting (it will never verify).
+   *     - If the iframe IS present and loading → wait up to 6 s for auto-verify.
+   *     - If no widget at all → click immediately.
+   *  2. Find the "Extend Server Time +60 min" button.
+   *     - If it is disabled/on-cooldown → return "cooldown".
+   *     - Otherwise scroll it into view.
+   *  3. Fire BOTH a real Puppeteer mouse-click (which passes Cloudflare's
+   *     event-fingerprint checks) AND a JS .click() as fallback.
+   *  4. Wait for a success signal (modal closes or clock updates) and log result.
+   *
+   * Returns: "clicked" | "cooldown" | "not_found"
+   */
+  private async clickExtendButton(): Promise<"clicked" | "cooldown" | "not_found"> {
+    if (!this.page) return "not_found";
+
+    // ── 1. Detect Turnstile widget state ──────────────────────────────────────
+    const turnstileInfo = await this.page.evaluate(() => {
+      const allText = document.body?.innerText || "";
+      const failedToLoad =
+        allText.includes("Failed to load Turnstile") ||
+        allText.includes("failed to load turnstile");
+
+      const iframe =
+        document.querySelector("iframe[src*='challenges.cloudflare']") ||
+        document.querySelector(".cf-turnstile iframe");
+
+      // A verified Turnstile iframe has a non-zero offsetHeight and its src loaded
+      const iframePresent = !!iframe;
+
+      return { failedToLoad, iframePresent };
+    });
+
+    if (turnstileInfo.failedToLoad) {
+      this.log(
+        "Turnstile script failed to load in this environment — skipping CF wait, clicking extend directly.",
+        "warn"
+      );
+    } else if (turnstileInfo.iframePresent) {
+      // Scroll to the Turnstile widget and give it time to auto-verify
       await this.page.evaluate(() => {
         const cfEl =
           document.querySelector("iframe[src*='challenges.cloudflare']") ||
           document.querySelector(".cf-turnstile") ||
           document.querySelector("[class*='turnstile']") ||
-          document.querySelector("[id*='turnstile']") ||
-          document.querySelector(".expired-warning-banner");
-        if (cfEl) {
-          cfEl.scrollIntoView({ behavior: "smooth", block: "center" });
-        } else {
-          window.scrollBy(0, 500);
-        }
+          document.querySelector("[id*='turnstile']");
+        if (cfEl) cfEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        else window.scrollBy(0, 300);
       });
+      this.log("Turnstile widget detected — waiting up to 6 s for auto-verification...");
+      await new Promise((r) => setTimeout(r, 6000));
+    } else {
+      this.log("No Turnstile widget found — clicking extend button directly.");
+      await this.page.evaluate(() => window.scrollBy(0, 300));
+      await new Promise((r) => setTimeout(r, 500));
+    }
 
-      this.log("Waiting 5s for Cloudflare auto-verification...");
-      await new Promise((r) => setTimeout(r, 5000));
+    // ── 2. Locate the extend button ───────────────────────────────────────────
+    const btnInfo = await this.page.evaluate(() => {
+      const allButtons = Array.from(
+        document.querySelectorAll("button, a")
+      ) as HTMLElement[];
 
-      // Click the specific "Extend Server Time +60 min" button
-      const clicked = await this.page.evaluate(() => {
-        const allButtons = Array.from(
-          document.querySelectorAll("button, a")
-        ) as HTMLElement[];
-        // First pass: exact match for "+60" or "server time" alongside "extend"
-        const extendBtn =
-          allButtons.find((b) => {
-            const txt = (b.textContent || "").toLowerCase().trim();
-            return txt.includes("extend") && (txt.includes("60") || txt.includes("server time"));
-          }) ||
-          allButtons.find((b) => {
-            const txt = (b.textContent || "").toLowerCase().trim();
-            return txt.includes("extend") && !txt.includes("renew server");
-          });
-        if (extendBtn) {
-          extendBtn.scrollIntoView({ behavior: "smooth", block: "center" });
-          extendBtn.click();
-          return extendBtn.textContent?.trim() || "button";
-        }
-        return null;
-      });
+      const extendBtn =
+        allButtons.find((b) => {
+          const txt = (b.textContent || "").toLowerCase().trim();
+          return txt.includes("extend") && (txt.includes("60") || txt.includes("server time"));
+        }) ||
+        allButtons.find((b) => {
+          const txt = (b.textContent || "").toLowerCase().trim();
+          return txt.includes("extend") && !txt.includes("renew server");
+        });
 
-      if (clicked) {
-        this.log(`Renewal button clicked ("${clicked}"). Waiting for confirmation...`);
-        await new Promise((r) => setTimeout(r, 3000));
-        await this.page.keyboard.press("Escape").catch(() => {});
+      if (!extendBtn) return null;
+
+      extendBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+
+      const rect = extendBtn.getBoundingClientRect();
+      const isDisabled =
+        (extendBtn as HTMLButtonElement).disabled ||
+        extendBtn.hasAttribute("disabled") ||
+        extendBtn.classList.toString().toLowerCase().includes("cooldown") ||
+        (extendBtn.textContent || "").toLowerCase().includes("cooldown");
+
+      return {
+        text: extendBtn.textContent?.trim() || "",
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        isDisabled,
+      };
+    });
+
+    if (!btnInfo) {
+      return "not_found";
+    }
+
+    if (btnInfo.isDisabled) {
+      this.log(`Extend button found but disabled/on-cooldown: "${btnInfo.text}"`);
+      return "cooldown";
+    }
+
+    // ── 3. Fire real mouse click + JS click ───────────────────────────────────
+    // Extra buffer so scrollIntoView animation settles
+    await new Promise((r) => setTimeout(r, 600));
+
+    this.log(`Clicking extend button via mouse: "${btnInfo.text}"...`);
+    try {
+      // Real mouse event — passes Cloudflare's pointer-event fingerprint check
+      await this.page.mouse.click(btnInfo.x, btnInfo.y);
+    } catch { /* ignore — may fail if element moved */ }
+
+    // JS click as belt-and-suspenders backup
+    await this.page.evaluate(() => {
+      const allButtons = Array.from(
+        document.querySelectorAll("button, a")
+      ) as HTMLElement[];
+      const extendBtn =
+        allButtons.find((b) => {
+          const txt = (b.textContent || "").toLowerCase().trim();
+          return txt.includes("extend") && (txt.includes("60") || txt.includes("server time"));
+        }) ||
+        allButtons.find((b) => {
+          const txt = (b.textContent || "").toLowerCase().trim();
+          return txt.includes("extend") && !txt.includes("renew server");
+        });
+      if (extendBtn) extendBtn.click();
+    }).catch(() => {});
+
+    // ── 4. Wait and verify success ────────────────────────────────────────────
+    await new Promise((r) => setTimeout(r, 4000));
+
+    const result = await this.page.evaluate(() => {
+      const body = document.body?.innerText || "";
+      const hasSuccess =
+        body.includes("extended") ||
+        body.includes("Extended") ||
+        body.includes("+60") ||
+        body.includes("success") ||
+        body.includes("Success");
+      const modalGone = !document.querySelector(".clock-time");
+      const hasExtendError =
+        (body.toLowerCase().includes("error") || body.toLowerCase().includes("failed")) &&
+        body.toLowerCase().includes("extend");
+      return { hasSuccess, modalGone, hasExtendError };
+    }).catch(() => ({ hasSuccess: false, modalGone: false, hasExtendError: false }));
+
+    if (result.hasExtendError) {
+      this.log("⚠ Extend may have failed — error text detected after click.", "warn");
+    } else if (result.hasSuccess || result.modalGone) {
+      this.log("✓ Server time extension confirmed.");
+    } else {
+      this.log("Extend button clicked — awaiting server confirmation.");
+    }
+
+    await this.page.keyboard.press("Escape").catch(() => {});
+    return "clicked";
+  }
+
+  private async triggerRenewalFlow(): Promise<void> {
+    if (!this.page) return;
+    try {
+      const result = await this.clickExtendButton();
+      if (result === "clicked") {
         // NOTE: do NOT call checkAndRenewServer() here — that causes a recursive loop
+      } else if (result === "cooldown") {
+        this.log("Renewal flow: extend button on cooldown.");
       } else {
         this.log("No Extend/Renew button found during renewal flow.", "warn");
       }
@@ -1085,63 +1162,22 @@ class BotManager {
         return;
       }
 
-      this.log("Server paused banner detected! Scrolling to Cloudflare verification box...", "warn");
+      this.log("Server paused banner detected — attempting to extend...", "warn");
 
-      // Scroll to the Cloudflare verification widget (below the banner)
-      await this.page.evaluate(() => {
-        // Try to scroll to a cf-turnstile or iframe first, else scroll to banner
-        const cfEl =
-          document.querySelector("iframe[src*='challenges.cloudflare']") ||
-          document.querySelector(".cf-turnstile") ||
-          document.querySelector("[class*='turnstile']") ||
-          document.querySelector("[id*='turnstile']") ||
-          document.querySelector(".expired-warning-banner");
-        if (cfEl) {
-          cfEl.scrollIntoView({ behavior: "smooth", block: "center" });
-        } else {
-          window.scrollBy(0, 400);
-        }
-      });
-
-      // Wait 5 seconds for Cloudflare to auto-verify
-      this.log("Waiting 5s for Cloudflare auto-verification...");
-      await new Promise((r) => setTimeout(r, 5000));
-
-      // Click the specific "Extend Server Time +60 min" button
-      const clicked = await this.page.evaluate(() => {
-        const allButtons = Array.from(
-          document.querySelectorAll("button, a")
-        ) as HTMLElement[];
-        // Prefer "+60" / "server time" + "extend" — avoids matching "RENEW SERVER" sidebar
-        const extendBtn =
-          allButtons.find((b) => {
-            const txt = (b.textContent || "").toLowerCase().trim();
-            return txt.includes("extend") && (txt.includes("60") || txt.includes("server time"));
-          }) ||
-          allButtons.find((b) => {
-            const txt = (b.textContent || "").toLowerCase().trim();
-            return txt.includes("extend") && !txt.includes("renew server");
-          });
-        if (extendBtn) {
-          extendBtn.scrollIntoView({ behavior: "smooth", block: "center" });
-          extendBtn.click();
-          return extendBtn.textContent?.trim() || "button";
-        }
-        return null;
-      });
-
-      if (clicked) {
-        this.log(`Extend button clicked ("${clicked}"). Server should resume shortly.`);
-        // Wait for the banner to disappear
-        await new Promise((r) => setTimeout(r, 3000));
+      const result = await this.clickExtendButton();
+      if (result === "clicked") {
+        // Check if banner cleared
+        await new Promise((r) => setTimeout(r, 2000));
         const stillPaused = await this.page.evaluate(
           () => !!document.querySelector(".expired-warning-banner")
         ).catch(() => false);
         if (stillPaused) {
-          this.log("Banner still visible after click — may need manual intervention.", "warn");
+          this.log("Pause banner still visible after extend — may need manual intervention.", "warn");
         } else {
           this.log("Server paused banner gone — server resumed successfully.");
         }
+      } else if (result === "cooldown") {
+        this.log("Cannot extend — button on cooldown. Server remains paused.", "warn");
       } else {
         this.log("Could not find Extend/Renew button — manual action may be needed.", "warn");
       }
