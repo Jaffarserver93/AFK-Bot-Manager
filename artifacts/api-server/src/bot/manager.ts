@@ -936,9 +936,30 @@ class BotManager {
       // directly from the open modal — do NOT close it first.
       if (totalMinutes < 28) {
         this.log(
-          `⚠ Only ${totalMinutes} min left — clicking "Extend Server Time +60 min"...`,
+          `⚠ Only ${totalMinutes} min left — scrolling to Cloudflare widget before extending...`,
           "warn"
         );
+
+        // Scroll to the Cloudflare verification widget inside the modal and wait
+        // for it to auto-verify before clicking Extend (required by the site).
+        await this.page.evaluate(() => {
+          const cfEl =
+            document.querySelector("iframe[src*='challenges.cloudflare']") ||
+            document.querySelector(".cf-turnstile") ||
+            document.querySelector("[class*='turnstile']") ||
+            document.querySelector("[id*='turnstile']") ||
+            document.querySelector(".expired-warning-banner");
+          if (cfEl) {
+            cfEl.scrollIntoView({ behavior: "smooth", block: "center" });
+          } else {
+            window.scrollBy(0, 300);
+          }
+        });
+
+        this.log("Waiting 5s for Cloudflare auto-verification inside modal...");
+        await new Promise((r) => setTimeout(r, 5000));
+
+        this.log(`Clicking "Extend Server Time +60 min"...`);
         const clicked = await this.page.evaluate(() => {
           const allButtons = Array.from(
             document.querySelectorAll("button, a")
@@ -962,8 +983,8 @@ class BotManager {
         });
 
         if (clicked) {
-          this.log(`Extend button clicked ("${clicked}"). Server time extended.`);
-          await new Promise((r) => setTimeout(r, 3000));
+          this.log(`Extend button clicked ("${clicked}"). Waiting for confirmation...`);
+          await new Promise((r) => setTimeout(r, 4000));
           await this.page.keyboard.press("Escape").catch(() => {});
           return true; // signal that we handled the extend — skip checkServerPaused
         } else {
