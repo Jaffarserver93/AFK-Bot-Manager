@@ -841,8 +841,12 @@ class BotManager {
 
         this.log(`Page ready (cycle ${reloadCount}). Checking server status...`);
         this._lastHealthyAt = Date.now();
-        await this.checkAndRenewServer();
-        await this.checkServerPaused();
+        const extendedByRenew = await this.checkAndRenewServer();
+        // Only run checkServerPaused if checkAndRenewServer did NOT already click Extend
+        // (prevents double-clicking the same button)
+        if (!extendedByRenew) {
+          await this.checkServerPaused();
+        }
       } catch (err: any) {
         if (this.isDetachedError(err)) {
           this.log(
@@ -872,17 +876,15 @@ class BotManager {
     }, 60000);
   }
 
-  private async checkAndRenewServer(): Promise<void> {
-    if (!this.page) return;
+  private async checkAndRenewServer(): Promise<boolean> {
+    if (!this.page) return false;
     try {
       // Click the RENEW SERVER button in the left sidebar
       this.log("Clicking RENEW SERVER sidebar button...");
       const renewClicked = await this.page.evaluate(() => {
-        // Walk every element looking for one whose direct text content matches
         const all = Array.from(document.querySelectorAll("a, button, div, span, li")) as HTMLElement[];
         const btn = all.find((el) => {
           const txt = el.textContent?.trim().toUpperCase() || "";
-          // match "RENEW SERVER" exactly, or an element that contains it as its primary text
           return (
             txt === "RENEW SERVER" ||
             (txt.includes("RENEW") && txt.includes("SERVER") && txt.length < 40)
@@ -894,7 +896,7 @@ class BotManager {
 
       if (!renewClicked) {
         this.log("RENEW SERVER button not found — skipping renewal check.", "warn");
-        return;
+        return false;
       }
 
       // Wait for the modal to open (clock-time element appears)
@@ -903,7 +905,7 @@ class BotManager {
         { timeout: 8000, polling: 500 }
       ).catch(() => null);
 
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 600));
 
       // Read the clock time from the modal
       const clockTime = await this.page.evaluate(() => {
@@ -914,7 +916,7 @@ class BotManager {
       if (!clockTime) {
         this.log("Modal opened but clock-time not readable — closing.", "warn");
         await this.page.keyboard.press("Escape").catch(() => {});
-        return;
+        return false;
       }
 
       // Parse time — format is HH:MM (e.g. "00:52" = 52 min, "01:30" = 90 min)
@@ -922,31 +924,63 @@ class BotManager {
       const parts = clockTime.split(":").map(Number);
       let totalMinutes = 0;
       if (parts.length === 2) {
-        // HH:MM
         totalMinutes = parts[0] * 60 + parts[1];
       } else if (parts.length === 3) {
-        // HH:MM:SS
         totalMinutes = parts[0] * 60 + parts[1];
       }
       this._timeRemainingMinutes = totalMinutes;
 
       this.log(`Free server time remaining: ${clockTime} (~${totalMinutes} min)`);
 
-      // Close the modal
-      await this.page.keyboard.press("Escape").catch(() => {});
-      await new Promise((r) => setTimeout(r, 600));
-
-      // If under 28 minutes, trigger the Cloudflare bypass + extend flow
-      if (totalMinutes > 0 && totalMinutes < 28) {
+      // If under 28 minutes (INCLUDING 0 = expired), click the Extend button
+      // directly from the open modal — do NOT close it first.
+      if (totalMinutes < 28) {
         this.log(
-          `⚠ Only ${totalMinutes} min left — triggering server renewal flow...`,
+          `⚠ Only ${totalMinutes} min left — clicking "Extend Server Time +60 min"...`,
           "warn"
         );
-        // Scroll to CF verification, wait 5s, click Extend
-        await this.triggerRenewalFlow();
+        const clicked = await this.page.evaluate(() => {
+          const allButtons = Array.from(
+            document.querySelectorAll("button, a")
+          ) as HTMLElement[];
+          // Prefer the specific "+60 min" / "Extend Server Time" button first
+          const extendBtn =
+            allButtons.find((b) => {
+              const txt = (b.textContent || "").toLowerCase().trim();
+              return txt.includes("extend") && (txt.includes("60") || txt.includes("server time"));
+            }) ||
+            allButtons.find((b) => {
+              const txt = (b.textContent || "").toLowerCase().trim();
+              return txt.includes("extend") && !txt.includes("renew server");
+            });
+          if (extendBtn) {
+            extendBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+            extendBtn.click();
+            return extendBtn.textContent?.trim() || "button";
+          }
+          return null;
+        });
+
+        if (clicked) {
+          this.log(`Extend button clicked ("${clicked}"). Server time extended.`);
+          await new Promise((r) => setTimeout(r, 3000));
+          await this.page.keyboard.press("Escape").catch(() => {});
+          return true; // signal that we handled the extend — skip checkServerPaused
+        } else {
+          this.log("Extend button not found in modal — closing modal.", "warn");
+          await this.page.keyboard.press("Escape").catch(() => {});
+          return false;
+        }
+      } else {
+        // Plenty of time remaining — just close the modal
+        this.log(`Server time OK (${totalMinutes} min). Closing modal.`);
+        await this.page.keyboard.press("Escape").catch(() => {});
+        await new Promise((r) => setTimeout(r, 600));
+        return false;
       }
     } catch (err: any) {
       this.log(`checkAndRenewServer error: ${err.message}`, "warn");
+      return false;
     }
   }
 
@@ -971,23 +1005,21 @@ class BotManager {
       this.log("Waiting 5s for Cloudflare auto-verification...");
       await new Promise((r) => setTimeout(r, 5000));
 
-      // Click the Extend / Renew / Free button
+      // Click the specific "Extend Server Time +60 min" button
       const clicked = await this.page.evaluate(() => {
         const allButtons = Array.from(
-          document.querySelectorAll("button, a[role='button'], input[type='button'], input[type='submit'], a")
+          document.querySelectorAll("button, a")
         ) as HTMLElement[];
-        const extendBtn = allButtons.find((b) => {
-          const txt = (b.textContent || (b as HTMLInputElement).value || "").toLowerCase().trim();
-          return (
-            txt.includes("extend") ||
-            txt.includes("renew") ||
-            txt.includes("continue") ||
-            txt.includes("free") ||
-            txt.includes("keep") ||
-            txt.includes("resume") ||
-            txt.includes("activate")
-          );
-        });
+        // First pass: exact match for "+60" or "server time" alongside "extend"
+        const extendBtn =
+          allButtons.find((b) => {
+            const txt = (b.textContent || "").toLowerCase().trim();
+            return txt.includes("extend") && (txt.includes("60") || txt.includes("server time"));
+          }) ||
+          allButtons.find((b) => {
+            const txt = (b.textContent || "").toLowerCase().trim();
+            return txt.includes("extend") && !txt.includes("renew server");
+          });
         if (extendBtn) {
           extendBtn.scrollIntoView({ behavior: "smooth", block: "center" });
           extendBtn.click();
@@ -999,8 +1031,8 @@ class BotManager {
       if (clicked) {
         this.log(`Renewal button clicked ("${clicked}"). Waiting for confirmation...`);
         await new Promise((r) => setTimeout(r, 3000));
-        // Re-check the time after renewal
-        await this.checkAndRenewServer();
+        await this.page.keyboard.press("Escape").catch(() => {});
+        // NOTE: do NOT call checkAndRenewServer() here — that causes a recursive loop
       } else {
         this.log("No Extend/Renew button found during renewal flow.", "warn");
       }
@@ -1043,23 +1075,21 @@ class BotManager {
       this.log("Waiting 5s for Cloudflare auto-verification...");
       await new Promise((r) => setTimeout(r, 5000));
 
-      // Click the Extend / Renew button below the verification box
+      // Click the specific "Extend Server Time +60 min" button
       const clicked = await this.page.evaluate(() => {
         const allButtons = Array.from(
-          document.querySelectorAll("button, a[role='button'], input[type='button'], input[type='submit']")
+          document.querySelectorAll("button, a")
         ) as HTMLElement[];
-        const extendBtn = allButtons.find((b) => {
-          const txt = (b.textContent || (b as HTMLInputElement).value || "").toLowerCase().trim();
-          return (
-            txt.includes("extend") ||
-            txt.includes("renew") ||
-            txt.includes("continue") ||
-            txt.includes("free") ||
-            txt.includes("keep") ||
-            txt.includes("resume") ||
-            txt.includes("activate")
-          );
-        });
+        // Prefer "+60" / "server time" + "extend" — avoids matching "RENEW SERVER" sidebar
+        const extendBtn =
+          allButtons.find((b) => {
+            const txt = (b.textContent || "").toLowerCase().trim();
+            return txt.includes("extend") && (txt.includes("60") || txt.includes("server time"));
+          }) ||
+          allButtons.find((b) => {
+            const txt = (b.textContent || "").toLowerCase().trim();
+            return txt.includes("extend") && !txt.includes("renew server");
+          });
         if (extendBtn) {
           extendBtn.scrollIntoView({ behavior: "smooth", block: "center" });
           extendBtn.click();
