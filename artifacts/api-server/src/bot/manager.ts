@@ -31,8 +31,7 @@ const BASE_CHROMIUM_ARGS = [
 export interface Credentials {
   loginUrl: string;
   targetUrl: string;
-  username: string;
-  password: string;
+  ylToken: string;
 }
 
 export interface ProxyConfig {
@@ -159,8 +158,7 @@ class BotManager {
       return {
         loginUrl: "https://www.bytenut.com/auth/login",
         targetUrl: "https://www.bytenut.com/free-gamepanel/317333e3",
-        username: "",
-        password: "",
+        ylToken: "",
       };
     }
     const raw = await readFile(CREDENTIALS_FILE, "utf8");
@@ -202,10 +200,10 @@ class BotManager {
       const creds = await this.readCredentials();
       const config = await this.readConfig();
 
-      if (!creds.username || !creds.password) {
+      if (!creds.ylToken) {
         this._status = "idle";
         throw new Error(
-          "Username and password are required. Please configure credentials first."
+          "YL Token is required. Please configure credentials first."
         );
       }
 
@@ -362,218 +360,36 @@ class BotManager {
   private async performLogin(creds: Credentials): Promise<boolean> {
     if (!this.page) return false;
 
-    this.log(`Navigating to login URL: ${creds.loginUrl}`);
-    await this.page.goto(creds.loginUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 60000,
+    this.log("Injecting yl-token cookie for authentication...");
+
+    // Derive the cookie domain from the target URL
+    let cookieDomain = "bytenut.com";
+    try {
+      const parsedUrl = new URL(creds.targetUrl || creds.loginUrl);
+      cookieDomain = parsedUrl.hostname.replace(/^www\./, "");
+    } catch { /* use default */ }
+
+    // Navigate to the base domain first so Puppeteer can set cookies on it
+    const baseUrl = `https://${cookieDomain}`;
+    this.log(`Navigating to base domain for cookie injection: ${baseUrl}`);
+    try {
+      await this.page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+    } catch (err: any) {
+      this.log(`Base domain navigation warning: ${err.message}`, "warn");
+    }
+
+    // Set the yl-token as a cookie on the domain
+    await this.page.setCookie({
+      name: "yl-token",
+      value: creds.ylToken,
+      domain: `.${cookieDomain}`,
+      path: "/",
+      httpOnly: false,
+      secure: true,
     });
+    this.log(`yl-token cookie injected on .${cookieDomain}`);
 
-    // Wait for Cloudflare to pass and real login form to appear
-    this.log("Waiting for login form (Cloudflare may be verifying)...");
-    const formReady = await this.page.waitForFunction(
-      () => {
-        const body = document.body?.innerText || "";
-        if (
-          body.includes("Verifying you are human") ||
-          body.includes("Just a moment") ||
-          body.includes("Please wait") ||
-          body.includes("Checking your browser")
-        ) return false;
-        return !!document.querySelector('input[type="password"]');
-      },
-      { timeout: 90000, polling: 1500 }
-    ).catch(() => null);
-
-    if (!formReady) {
-      this.log("Login form not found after waiting — proceeding anyway.", "warn");
-    } else {
-      this.log("Login form detected. Filling credentials...");
-    }
-
-    // Small buffer for React/Vue to finish hydrating the form
-    await new Promise((r) => setTimeout(r, 800));
-
-    // Find input selectors via DOM inspection
-    const selectors = await this.page.evaluate(() => {
-      const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
-      const userInput = inputs.find(
-        (i) =>
-          i.type === "email" ||
-          i.name?.toLowerCase().includes("email") ||
-          i.name?.toLowerCase().includes("user") ||
-          i.id?.toLowerCase().includes("email") ||
-          i.id?.toLowerCase().includes("user") ||
-          i.placeholder?.toLowerCase().includes("email") ||
-          i.placeholder?.toLowerCase().includes("username")
-      );
-      const passInput = inputs.find(
-        (i) =>
-          i.type === "password" ||
-          i.name?.toLowerCase().includes("pass") ||
-          i.id?.toLowerCase().includes("pass")
-      );
-      const submitBtn = Array.from(
-        document.querySelectorAll("button, input[type=submit]")
-      ).find((b: any) => {
-        const txt = (b.textContent || b.value || "").toLowerCase();
-        return (
-          txt.includes("login") ||
-          txt.includes("sign in") ||
-          txt.includes("log in") ||
-          b.type === "submit"
-        );
-      }) as HTMLElement | undefined;
-
-      return {
-        userSel: userInput
-          ? userInput.id
-            ? `#${CSS.escape(userInput.id)}`
-            : userInput.name
-            ? `input[name="${userInput.name}"]`
-            : 'input[type="email"],input[type="text"]'
-          : 'input[type="email"],input[type="text"]',
-        passSel: passInput
-          ? passInput.id
-            ? `#${CSS.escape(passInput.id)}`
-            : passInput.name
-            ? `input[name="${passInput.name}"]`
-            : 'input[type="password"]'
-          : 'input[type="password"]',
-        submitSel: submitBtn
-          ? submitBtn.id
-            ? `#${CSS.escape(submitBtn.id)}`
-            : null
-          : null,
-      };
-    }).catch(() => ({
-      userSel: 'input[type="email"],input[type="text"]',
-      passSel: 'input[type="password"]',
-      submitSel: null,
-    }));
-
-    this.log(`Using selectors — user: ${selectors.userSel} | pass: ${selectors.passSel}`);
-
-    // Fill username with real keystrokes
-    try {
-      await this.page.click(selectors.userSel, { clickCount: 3 });
-      await this.page.keyboard.type(creds.username, { delay: 40 });
-    } catch {
-      await this.page.evaluate((sel: string, val: string) => {
-        const el = document.querySelector(sel) as HTMLInputElement | null;
-        if (!el) return;
-        el.focus();
-        el.value = val;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-      }, selectors.userSel, creds.username);
-    }
-
-    await new Promise((r) => setTimeout(r, 300));
-
-    // Fill password with real keystrokes
-    try {
-      await this.page.click(selectors.passSel, { clickCount: 3 });
-      await this.page.keyboard.type(creds.password, { delay: 40 });
-    } catch {
-      await this.page.evaluate((sel: string, val: string) => {
-        const el = document.querySelector(sel) as HTMLInputElement | null;
-        if (!el) return;
-        el.focus();
-        el.value = val;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-      }, selectors.passSel, creds.password);
-    }
-
-    await new Promise((r) => setTimeout(r, 300));
-    this.log("Credentials filled. Submitting login form...");
-
-    // Submit — use page.click() with real pointer events (React/Vue ignore DOM .click())
-    // Try progressively broader selectors until one works, then fall back to Enter.
-    this.log("Submitting login form...");
-    let submitted = false;
-
-    // 1. If we captured a specific selector from DOM inspection, try it first
-    if (selectors.submitSel) {
-      submitted = await this.page.click(selectors.submitSel).then(() => true).catch(() => false);
-    }
-
-    // 2. button[type="submit"] — most reliable for standard forms
-    if (!submitted) {
-      submitted = await this.page.click('button[type="submit"]').then(() => true).catch(() => false);
-      if (submitted) this.log('Submitted via button[type="submit"]');
-    }
-
-    // 3. input[type="submit"]
-    if (!submitted) {
-      submitted = await this.page.click('input[type="submit"]').then(() => true).catch(() => false);
-      if (submitted) this.log('Submitted via input[type="submit"]');
-    }
-
-    // 4. XPath — find a button whose visible text contains "sign in" or "log in"
-    if (!submitted) {
-      try {
-        const [btnHandle] = await (this.page as any).$x(
-          '//button[contains(translate(normalize-space(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "sign in") or contains(translate(normalize-space(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "log in") or contains(translate(normalize-space(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "login")]'
-        );
-        if (btnHandle) {
-          await btnHandle.click();
-          submitted = true;
-          this.log("Submitted via XPath text search on button");
-        }
-      } catch { /* ignore */ }
-    }
-
-    // 5. Last resort — press Enter on the password field
-    if (!submitted) {
-      this.log("No submit button found — pressing Enter", "warn");
-      await this.page.focus(selectors.passSel).catch(() => {});
-      await this.page.keyboard.press("Enter");
-    }
-
-    // ── Wait for SPA to actually authenticate ─────────────────────────────────
-    // Only trust a URL change away from the login page — body-text checks are
-    // unreliable because bytenut's nav renders "game panel" / "free server"
-    // text on every page (including the login page), which caused false positives.
-    this.log("Waiting for authentication to complete...");
-    const authenticated = await this.page.waitForFunction(
-      () => {
-        const url = window.location.href.toLowerCase();
-        return !url.includes("/auth/login") && !url.includes("/login");
-      },
-      { timeout: 20000, polling: 800 }
-    ).catch(() => null);
-
-    const urlAfterLogin = this.page.url();
-    this.log(`Login submitted — URL: ${urlAfterLogin}`);
-
-    if (!authenticated) {
-      // URL didn't change — check for an explicit error message before giving up
-      const hasError = await this.page.evaluate(() => {
-        const body = document.body?.innerText?.toLowerCase() || "";
-        return (
-          body.includes("invalid") ||
-          body.includes("incorrect") ||
-          body.includes("wrong password") ||
-          body.includes("credentials")
-        );
-      }).catch(() => false);
-
-      if (hasError) {
-        this.log("Login failed — invalid credentials reported by site.", "error");
-        return false;
-      }
-
-      // URL unchanged but no error shown — SPA may use cookie/token without redirect.
-      // Proceed and let the target-URL navigation validate the session.
-      this.log("Login submitted — URL unchanged after 20 s. Proceeding to target to verify session...", "warn");
-    } else {
-      this.log("Authentication confirmed (URL left login page). Navigating to target URL...");
-    }
-
-    // Extra settle time so the session cookie/token is written before we navigate
-    await new Promise((r) => setTimeout(r, 3000));
-
+    // Navigate directly to the target URL — no login form needed
     this.log(`Navigating to target URL: ${creds.targetUrl}`);
     await this.page.goto(creds.targetUrl, {
       waitUntil: "domcontentloaded",
@@ -581,15 +397,23 @@ class BotManager {
     });
 
     await this.dismissPopups();
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, 2000));
     await this.dismissPopups();
 
-    // Verify we actually landed on the target (not bounced back to login)
+    // Verify we landed on the target (not bounced back to login)
     const finalUrl = this.page.url();
     if (this.isOnLoginPage(finalUrl)) {
-      // One retry: wait an extra 5 s (session cookie may still be propagating) then re-navigate
-      this.log("Target bounced to login page — waiting 5 s and retrying navigation...", "warn");
-      await new Promise((r) => setTimeout(r, 5000));
+      // One retry: re-inject token and re-navigate (token may not have taken effect yet)
+      this.log("Target bounced to login page — re-injecting token and retrying...", "warn");
+      await this.page.setCookie({
+        name: "yl-token",
+        value: creds.ylToken,
+        domain: `.${cookieDomain}`,
+        path: "/",
+        httpOnly: false,
+        secure: true,
+      });
+      await new Promise((r) => setTimeout(r, 2000));
       await this.page.goto(creds.targetUrl, {
         waitUntil: "domcontentloaded",
         timeout: 90000,
@@ -598,7 +422,7 @@ class BotManager {
       const retryUrl = this.page.url();
       if (this.isOnLoginPage(retryUrl)) {
         this.log(
-          `Target still redirects to login after retry — authentication failed. URL: ${retryUrl}`,
+          `Target still redirects to login after retry — yl-token may be invalid. URL: ${retryUrl}`,
           "error"
         );
         return false;

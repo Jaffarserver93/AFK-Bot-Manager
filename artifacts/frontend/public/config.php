@@ -48,18 +48,15 @@ $apiBase = '/api';
         <input type="url" id="targetUrl" class="form-input" placeholder="https://..." value="">
       </div>
       <div class="form-group">
-        <label class="form-label">Username / Email</label>
-        <input type="text" id="username" class="form-input" placeholder="your@email.com" value="" autocomplete="off">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Password</label>
+        <label class="form-label">YL Token</label>
         <div class="input-pw-wrap">
-          <input type="password" id="password" class="form-input" placeholder="Enter new password to change" autocomplete="off">
-          <button type="button" class="pw-toggle" id="pwToggle" aria-label="Toggle password">
-            <svg id="pwEyeOpen" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-            <svg id="pwEyeOff" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+          <input type="password" id="ylToken" class="form-input" placeholder="Enter yl-token to set / change" autocomplete="off">
+          <button type="button" class="pw-toggle" id="ylTokenToggle" aria-label="Toggle YL token">
+            <svg id="ylTokenEyeOpen" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            <svg id="ylTokenEyeOff" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
           </button>
         </div>
+        <div class="form-hint">Your session token used by the bot to authenticate</div>
       </div>
       <button class="btn btn-primary btn-full" id="saveCredentials">Save Credentials</button>
     </div>
@@ -119,7 +116,7 @@ function showToast(msg, ok) {
   setTimeout(() => { t.style.display = 'none'; }, 2800);
 }
 
-let _savedPassword = '';
+let _savedYlToken = '';
 
 async function loadCredentials() {
   try {
@@ -127,10 +124,9 @@ async function loadCredentials() {
     const d = await r.json();
     document.getElementById('loginUrl').value = d.loginUrl || '';
     document.getElementById('targetUrl').value = d.targetUrl || '';
-    document.getElementById('username').value = d.username || '';
-    _savedPassword = d.password || '';
-    document.getElementById('password').value = '';
-    document.getElementById('password').placeholder = _savedPassword ? 'Password saved — enter new to change' : 'Enter password';
+    _savedYlToken = d.ylToken || '';
+    document.getElementById('ylToken').value = '';
+    document.getElementById('ylToken').placeholder = _savedYlToken ? 'Token saved — enter new to change' : 'Enter yl-token';
   } catch(e) {}
 }
 
@@ -156,12 +152,12 @@ document.getElementById('intervalExact').addEventListener('input', function() {
   document.getElementById('intervalDisplay').textContent = v + ' ms';
 });
 
-document.getElementById('pwToggle').addEventListener('click', function() {
-  const inp = document.getElementById('password');
+document.getElementById('ylTokenToggle').addEventListener('click', function() {
+  const inp = document.getElementById('ylToken');
   const isHidden = inp.type === 'password';
   inp.type = isHidden ? 'text' : 'password';
-  document.getElementById('pwEyeOpen').style.display = isHidden ? 'none' : '';
-  document.getElementById('pwEyeOff').style.display = isHidden ? '' : 'none';
+  document.getElementById('ylTokenEyeOpen').style.display = isHidden ? 'none' : '';
+  document.getElementById('ylTokenEyeOff').style.display = isHidden ? '' : 'none';
 });
 
 document.getElementById('saveCredentials').addEventListener('click', async function() {
@@ -169,21 +165,20 @@ document.getElementById('saveCredentials').addEventListener('click', async funct
   btn.disabled = true;
   btn.textContent = 'Saving...';
   try {
-    const typedPassword = document.getElementById('password').value;
+    const typedToken = document.getElementById('ylToken').value;
     const body = {
       loginUrl: document.getElementById('loginUrl').value,
       targetUrl: document.getElementById('targetUrl').value,
-      username: document.getElementById('username').value,
-      password: typedPassword || _savedPassword,
+      ylToken: typedToken || _savedYlToken,
     };
     const r = await fetch(API + '/credentials', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
     const d = await r.json();
     if (d.ok) {
       showToast('Credentials saved!', true);
-      if (typedPassword) {
-        _savedPassword = typedPassword;
-        document.getElementById('password').value = '';
-        document.getElementById('password').placeholder = 'Password saved — enter new to change';
+      if (typedToken) {
+        _savedYlToken = typedToken;
+        document.getElementById('ylToken').value = '';
+        document.getElementById('ylToken').placeholder = 'Token saved — enter new to change';
       }
     } else showToast('Failed to save.', false);
   } catch(e) {

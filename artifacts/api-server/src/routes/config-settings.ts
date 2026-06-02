@@ -52,28 +52,25 @@ router.get("/credentials", async (_req: Request, res: Response): Promise<void> =
   res.json({
     loginUrl: creds.loginUrl,
     targetUrl: creds.targetUrl,
-    username: creds.username,
-    password: creds.password ? "••••••••" : "",
+    ylToken: creds.ylToken ? "••••••••" : "",
   });
 });
 
 router.post("/credentials", async (req: Request, res: Response): Promise<void> => {
-  const { loginUrl, targetUrl, username, password } = req.body as {
+  const { loginUrl, targetUrl, ylToken } = req.body as {
     loginUrl?: string;
     targetUrl?: string;
-    username?: string;
-    password?: string;
+    ylToken?: string;
   };
 
   const existing = await botManager.readCredentials();
   const updated = {
     loginUrl: typeof loginUrl === "string" ? loginUrl.trim() : existing.loginUrl,
     targetUrl: typeof targetUrl === "string" ? targetUrl.trim() : existing.targetUrl,
-    username: typeof username === "string" ? username.trim() : existing.username,
-    password:
-      typeof password === "string" && password !== "••••••••"
-        ? password
-        : existing.password,
+    ylToken:
+      typeof ylToken === "string" && ylToken !== "••••••••"
+        ? ylToken
+        : existing.ylToken,
   };
 
   await botManager.writeCredentials(updated);
