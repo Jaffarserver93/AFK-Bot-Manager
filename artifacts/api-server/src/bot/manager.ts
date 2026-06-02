@@ -899,13 +899,24 @@ class BotManager {
         return false;
       }
 
-      // Wait for the modal to open (clock-time element appears)
+      // Wait for the modal to open AND for the clock to show a non-zero value.
+      // The modal initially renders "00:00" while it fetches data from the server —
+      // we must poll until the value stabilises to something meaningful (non-zero),
+      // or until 12 seconds have elapsed (then we take whatever is shown).
       await this.page.waitForFunction(
-        () => !!document.querySelector(".clock-time"),
-        { timeout: 8000, polling: 500 }
-      ).catch(() => null);
+        () => {
+          const el = document.querySelector(".clock-time");
+          if (!el) return false;
+          const txt = (el.textContent || "").trim();
+          // Accept any value that is NOT blank and NOT "00:00"
+          if (!txt || txt === "00:00") return false;
+          return true;
+        },
+        { timeout: 12000, polling: 400 }
+      ).catch(() => null); // timeout is OK — we'll read whatever is there
 
-      await new Promise((r) => setTimeout(r, 600));
+      // Extra buffer for Vue reactivity to settle after the value updates
+      await new Promise((r) => setTimeout(r, 800));
 
       // Read the clock time from the modal
       const clockTime = await this.page.evaluate(() => {
