@@ -326,6 +326,18 @@ class BotManager {
       });
 
       this.log("Ad-spoof script injected (runs before page JS on every navigation).");
+
+      // ── Inject yl-token into localStorage before every page load ─────────────
+      // bytenut.com is a SPA that reads the auth token from localStorage.
+      // evaluateOnNewDocument runs before any page JS so the token is always
+      // present when the app bootstraps, preventing login redirects.
+      if (creds.ylToken) {
+        await this.page.evaluateOnNewDocument((token: string) => {
+          try { localStorage.setItem("yl-token", token); } catch {}
+        }, creds.ylToken);
+        this.log("yl-token localStorage injection registered (runs on every navigation).");
+      }
+
       this.log("Chromium launched successfully.");
       const loginOk = await this.performLogin(creds);
       if (!loginOk) {
@@ -360,76 +372,60 @@ class BotManager {
   private async performLogin(creds: Credentials): Promise<boolean> {
     if (!this.page) return false;
 
-    this.log("Injecting yl-token cookie for authentication...");
+    this.log("Authenticating via yl-token (localStorage injection)...");
 
-    // Derive the cookie domain from the target URL
-    let cookieDomain = "bytenut.com";
-    try {
-      const parsedUrl = new URL(creds.targetUrl || creds.loginUrl);
-      cookieDomain = parsedUrl.hostname.replace(/^www\./, "");
-    } catch { /* use default */ }
+    // Helper: write the token into the current page's localStorage
+    const injectTokenNow = async () => {
+      try {
+        await this.page!.evaluate((token: string) => {
+          try { localStorage.setItem("yl-token", token); } catch {}
+        }, creds.ylToken);
+      } catch { /* ignore — page may be navigating */ }
+    };
 
-    // Navigate to the base domain first so Puppeteer can set cookies on it
-    const baseUrl = `https://${cookieDomain}`;
-    this.log(`Navigating to base domain for cookie injection: ${baseUrl}`);
-    try {
-      await this.page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-    } catch (err: any) {
-      this.log(`Base domain navigation warning: ${err.message}`, "warn");
-    }
-
-    // Set the yl-token as a cookie on the domain
-    await this.page.setCookie({
-      name: "yl-token",
-      value: creds.ylToken,
-      domain: `.${cookieDomain}`,
-      path: "/",
-      httpOnly: false,
-      secure: true,
-    });
-    this.log(`yl-token cookie injected on .${cookieDomain}`);
-
-    // Navigate directly to the target URL — no login form needed
+    // Navigate to target directly — evaluateOnNewDocument already set localStorage
     this.log(`Navigating to target URL: ${creds.targetUrl}`);
     await this.page.goto(creds.targetUrl, {
       waitUntil: "domcontentloaded",
       timeout: 90000,
     });
 
+    // Also set it imperatively in the current context (covers SPA rehydration)
+    await injectTokenNow();
     await this.dismissPopups();
     await new Promise((r) => setTimeout(r, 2000));
     await this.dismissPopups();
 
-    // Verify we landed on the target (not bounced back to login)
-    const finalUrl = this.page.url();
-    if (this.isOnLoginPage(finalUrl)) {
-      // One retry: re-inject token and re-navigate (token may not have taken effect yet)
-      this.log("Target bounced to login page — re-injecting token and retrying...", "warn");
-      await this.page.setCookie({
-        name: "yl-token",
-        value: creds.ylToken,
-        domain: `.${cookieDomain}`,
-        path: "/",
-        httpOnly: false,
-        secure: true,
-      });
-      await new Promise((r) => setTimeout(r, 2000));
-      await this.page.goto(creds.targetUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 90000,
-      }).catch(() => {});
-      await this.dismissPopups();
-      const retryUrl = this.page.url();
-      if (this.isOnLoginPage(retryUrl)) {
-        this.log(
-          `Target still redirects to login after retry — yl-token may be invalid. URL: ${retryUrl}`,
-          "error"
-        );
-        return false;
-      }
-      this.log(`Retry navigation succeeded. URL: ${retryUrl}`);
+    // Check if we landed correctly
+    const firstUrl = this.page.url();
+    if (!this.isOnLoginPage(firstUrl)) {
+      this.log(`Authentication successful. URL: ${firstUrl}`);
+      return true;
     }
 
+    // Bounced to login — re-inject token into localStorage and retry
+    this.log("Target bounced to login page — re-injecting yl-token into localStorage and retrying...", "warn");
+    await injectTokenNow();
+    await new Promise((r) => setTimeout(r, 1500));
+
+    await this.page.goto(creds.targetUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 90000,
+    }).catch(() => {});
+
+    await injectTokenNow();
+    await this.dismissPopups();
+
+    const retryUrl = this.page.url();
+    if (this.isOnLoginPage(retryUrl)) {
+      this.log(
+        `Target still redirects to login after retry — yl-token may be invalid or expired. URL: ${retryUrl}`,
+        "error"
+      );
+      return false;
+    }
+
+    this.log(`Retry navigation succeeded. URL: ${retryUrl}`);
     return true;
   }
 
@@ -752,6 +748,13 @@ class BotManager {
     if (!creds.targetUrl) return;
     this.log(`Navigating to target URL: ${creds.targetUrl}`);
     await this.page.goto(creds.targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+    if (creds.ylToken) {
+      try {
+        await this.page.evaluate((token: string) => {
+          try { localStorage.setItem("yl-token", token); } catch {}
+        }, creds.ylToken);
+      } catch { /* ignore */ }
+    }
     await this.dismissPopups();
     this.log("Navigated to target URL successfully.");
   }
