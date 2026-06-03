@@ -1034,61 +1034,119 @@ class BotManager {
    * Unified extend-button handler used by all renewal paths.
    *
    * Strategy:
-   *  1. Inspect the Turnstile widget state inside the modal/page.
-   *     - If the script FAILED to load → skip waiting (it will never verify).
-   *     - If the iframe IS present and loading → wait up to 6 s for auto-verify.
-   *     - If no widget at all → click immediately.
+   *  1. Poll up to 35 s for Cloudflare Turnstile to auto-verify by watching the
+   *     hidden `[name="cf-turnstile-response"]` input for a non-empty token.
+   *     - Every 8 s without a token: click the Turnstile iframe center to trigger
+   *       the checkbox challenge (needed on datacenter/VPN IPs).
+   *     - If the script itself failed to load, skip the wait entirely.
    *  2. Find the "Extend Server Time +60 min" button.
-   *     - If it is disabled/on-cooldown → return "cooldown".
-   *     - Otherwise scroll it into view.
-   *  3. Fire BOTH a real Puppeteer mouse-click (which passes Cloudflare's
-   *     event-fingerprint checks) AND a JS .click() as fallback.
-   *  4. Wait for a success signal (modal closes or clock updates) and log result.
+   *     - If disabled AND Turnstile verified → force-remove disabled attr.
+   *     - If disabled AND Turnstile NOT verified → return "cooldown".
+   *  3. Fire real Puppeteer mouse-click (passes CF event fingerprint) + JS fallback.
+   *  4. Wait for success signal and log.
    *
    * Returns: "clicked" | "cooldown" | "not_found"
    */
   private async clickExtendButton(): Promise<"clicked" | "cooldown" | "not_found"> {
     if (!this.page) return "not_found";
 
-    // ── 1. Detect Turnstile widget state ──────────────────────────────────────
-    const turnstileInfo = await this.page.evaluate(() => {
-      const allText = document.body?.innerText || "";
-      const failedToLoad =
-        allText.includes("Failed to load Turnstile") ||
-        allText.includes("failed to load turnstile");
+    // ── 1. Poll for Turnstile auto-verification ───────────────────────────────
+    const TURNSTILE_TIMEOUT_MS = 35000;
+    const pollStart = Date.now();
+    let turnstileVerified = false;
+    let turnstileFailed = false;
+    let lastIframeClickAt = 0;
 
-      const iframe =
-        document.querySelector("iframe[src*='challenges.cloudflare']") ||
-        document.querySelector(".cf-turnstile iframe");
+    this.log("Checking Cloudflare Turnstile state...");
 
-      // A verified Turnstile iframe has a non-zero offsetHeight and its src loaded
-      const iframePresent = !!iframe;
+    // Scroll Turnstile widget into view immediately so CF starts the auto-solve
+    await this.page.evaluate(() => {
+      const cfEl =
+        (document.querySelector("iframe[src*='challenges.cloudflare']") as HTMLElement) ||
+        (document.querySelector(".cf-turnstile") as HTMLElement) ||
+        (document.querySelector("[class*='turnstile']") as HTMLElement);
+      if (cfEl) cfEl.scrollIntoView({ behavior: "smooth", block: "center" });
+      else window.scrollBy(0, 300);
+    }).catch(() => {});
 
-      return { failedToLoad, iframePresent };
-    });
+    while (Date.now() - pollStart < TURNSTILE_TIMEOUT_MS) {
+      const state = await this.page.evaluate(() => {
+        // Verified: hidden input holds the token
+        const tokenInput = document.querySelector<HTMLInputElement>(
+          'input[name="cf-turnstile-response"], input[name="cf-turnstile-response-"]'
+        );
+        const hasToken = !!(tokenInput?.value && tokenInput.value.length > 10);
 
-    if (turnstileInfo.failedToLoad) {
+        // Script load failure
+        const bodyText = document.body?.innerText || "";
+        const failed =
+          bodyText.includes("Failed to load Turnstile") ||
+          bodyText.includes("failed to load turnstile") ||
+          bodyText.includes("Unable to load Turnstile");
+
+        // Iframe present = widget is active (loading or showing checkbox)
+        const iframe = document.querySelector<HTMLElement>(
+          "iframe[src*='challenges.cloudflare']"
+        );
+        const iframeRect = iframe?.getBoundingClientRect();
+        const iframeVisible =
+          !!iframe &&
+          !!(iframeRect && iframeRect.width > 0 && iframeRect.height > 0);
+
+        return { hasToken, failed, iframeVisible };
+      }).catch(() => ({ hasToken: false, failed: false, iframeVisible: false }));
+
+      if (state.hasToken) {
+        turnstileVerified = true;
+        this.log("✓ Cloudflare Turnstile auto-verified (token received).");
+        break;
+      }
+
+      if (state.failed) {
+        turnstileFailed = true;
+        this.log(
+          "Turnstile script failed to load — will attempt direct click without captcha.",
+          "warn"
+        );
+        break;
+      }
+
+      // No widget at all → click immediately
+      if (!state.iframeVisible && Date.now() - pollStart > 3000) {
+        this.log("No Turnstile widget found — proceeding without captcha wait.");
+        break;
+      }
+
+      // Every 8 s: physically click the iframe to trigger checkbox challenge
+      const elapsed = Date.now() - pollStart;
+      if (state.iframeVisible && elapsed - lastIframeClickAt >= 8000) {
+        lastIframeClickAt = elapsed;
+        try {
+          const iframeEl = await this.page.$("iframe[src*='challenges.cloudflare']");
+          if (iframeEl) {
+            const box = await iframeEl.boundingBox();
+            if (box && box.width > 0 && box.height > 0) {
+              // Click the checkbox area (left-quarter of the iframe)
+              await this.page.mouse.click(
+                box.x + Math.min(25, box.width * 0.25),
+                box.y + box.height / 2
+              );
+              this.log(
+                `Clicked Turnstile iframe checkbox at t+${Math.round(elapsed / 1000)}s — waiting for auto-solve...`
+              );
+            }
+          }
+        } catch { /* iframe may still be loading */ }
+      }
+
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+
+    if (!turnstileVerified && !turnstileFailed) {
       this.log(
-        "Turnstile script failed to load in this environment — skipping CF wait, clicking extend directly.",
+        `Turnstile did not verify within ${TURNSTILE_TIMEOUT_MS / 1000}s — attempting click anyway.`,
         "warn"
       );
-    } else if (turnstileInfo.iframePresent) {
-      // Scroll to the Turnstile widget and give it time to auto-verify
-      await this.page.evaluate(() => {
-        const cfEl =
-          document.querySelector("iframe[src*='challenges.cloudflare']") ||
-          document.querySelector(".cf-turnstile") ||
-          document.querySelector("[class*='turnstile']") ||
-          document.querySelector("[id*='turnstile']");
-        if (cfEl) cfEl.scrollIntoView({ behavior: "smooth", block: "center" });
-        else window.scrollBy(0, 300);
-      });
-      this.log("Turnstile widget detected — waiting up to 6 s for auto-verification...");
-      await new Promise((r) => setTimeout(r, 6000));
-    } else {
-      this.log("No Turnstile widget found — clicking extend button directly.");
-      await this.page.evaluate(() => window.scrollBy(0, 300));
-      await new Promise((r) => setTimeout(r, 500));
     }
 
     // ── 2. Locate the extend button ───────────────────────────────────────────
@@ -1110,8 +1168,8 @@ class BotManager {
       if (!extendBtn) return null;
 
       extendBtn.scrollIntoView({ behavior: "smooth", block: "center" });
-
       const rect = extendBtn.getBoundingClientRect();
+
       const isDisabled =
         (extendBtn as HTMLButtonElement).disabled ||
         extendBtn.hasAttribute("disabled") ||
@@ -1127,30 +1185,60 @@ class BotManager {
     });
 
     if (!btnInfo) {
+      this.log("Extend button not found in modal.", "warn");
       return "not_found";
     }
 
     if (btnInfo.isDisabled) {
-      this.log(`Extend button found but disabled/on-cooldown: "${btnInfo.text}"`);
-      return "cooldown";
+      if (turnstileVerified) {
+        // Turnstile token is present but Vue hasn't re-enabled the button yet —
+        // force-remove the disabled attribute and proceed.
+        this.log(
+          "Turnstile verified but button still disabled — force-enabling via JS...",
+          "warn"
+        );
+        await this.page.evaluate(() => {
+          const allButtons = Array.from(
+            document.querySelectorAll("button, a")
+          ) as HTMLElement[];
+          const btn =
+            allButtons.find((b) => {
+              const txt = (b.textContent || "").toLowerCase().trim();
+              return txt.includes("extend") && (txt.includes("60") || txt.includes("server time"));
+            }) ||
+            allButtons.find((b) => {
+              const txt = (b.textContent || "").toLowerCase().trim();
+              return txt.includes("extend") && !txt.includes("renew server");
+            });
+          if (btn) {
+            (btn as HTMLButtonElement).disabled = false;
+            btn.removeAttribute("disabled");
+            // Remove any Vue-bound disabled class
+            btn.classList.remove("disabled", "btn-disabled", "is-disabled");
+          }
+        });
+        await new Promise((r) => setTimeout(r, 500));
+      } else {
+        this.log(
+          `Extend button disabled and Turnstile not verified — on cooldown or captcha required: "${btnInfo.text}"`
+        );
+        return "cooldown";
+      }
     }
 
-    // ── 3. Fire real mouse click + JS click ───────────────────────────────────
-    // Extra buffer so scrollIntoView animation settles
+    // ── 3. Fire real mouse click + JS fallback ────────────────────────────────
     await new Promise((r) => setTimeout(r, 600));
+    this.log(`Clicking extend button: "${btnInfo.text}"...`);
 
-    this.log(`Clicking extend button via mouse: "${btnInfo.text}"...`);
     try {
-      // Real mouse event — passes Cloudflare's pointer-event fingerprint check
       await this.page.mouse.click(btnInfo.x, btnInfo.y);
-    } catch { /* ignore — may fail if element moved */ }
+    } catch { /* ignore — element may have shifted */ }
 
-    // JS click as belt-and-suspenders backup
     await this.page.evaluate(() => {
       const allButtons = Array.from(
         document.querySelectorAll("button, a")
       ) as HTMLElement[];
-      const extendBtn =
+      const btn =
         allButtons.find((b) => {
           const txt = (b.textContent || "").toLowerCase().trim();
           return txt.includes("extend") && (txt.includes("60") || txt.includes("server time"));
@@ -1159,11 +1247,11 @@ class BotManager {
           const txt = (b.textContent || "").toLowerCase().trim();
           return txt.includes("extend") && !txt.includes("renew server");
         });
-      if (extendBtn) extendBtn.click();
+      if (btn) btn.click();
     }).catch(() => {});
 
-    // ── 4. Wait and verify success ────────────────────────────────────────────
-    await new Promise((r) => setTimeout(r, 4000));
+    // ── 4. Wait for success signal ────────────────────────────────────────────
+    await new Promise((r) => setTimeout(r, 4500));
 
     const result = await this.page.evaluate(() => {
       const body = document.body?.innerText || "";
@@ -1183,7 +1271,7 @@ class BotManager {
     if (result.hasExtendError) {
       this.log("⚠ Extend may have failed — error text detected after click.", "warn");
     } else if (result.hasSuccess || result.modalGone) {
-      this.log("✓ Server time extension confirmed.");
+      this.log("✓ Server time extended successfully.");
     } else {
       this.log("Extend button clicked — awaiting server confirmation.");
     }
