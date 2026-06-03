@@ -31,7 +31,8 @@ const BASE_CHROMIUM_ARGS = [
 export interface Credentials {
   loginUrl: string;
   targetUrl: string;
-  ylToken: string;
+  username: string;
+  password: string;
 }
 
 export interface ProxyConfig {
@@ -158,7 +159,8 @@ class BotManager {
       return {
         loginUrl: "https://www.bytenut.com/auth/login",
         targetUrl: "https://www.bytenut.com/free-gamepanel/317333e3",
-        ylToken: "",
+        username: "",
+        password: "",
       };
     }
     const raw = await readFile(CREDENTIALS_FILE, "utf8");
@@ -200,10 +202,10 @@ class BotManager {
       const creds = await this.readCredentials();
       const config = await this.readConfig();
 
-      if (!creds.ylToken) {
+      if (!creds.username || !creds.password) {
         this._status = "idle";
         throw new Error(
-          "YL Token is required. Please configure credentials first."
+          "Username and password are required. Please configure credentials first."
         );
       }
 
@@ -327,17 +329,6 @@ class BotManager {
 
       this.log("Ad-spoof script injected (runs before page JS on every navigation).");
 
-      // ── Inject yl-token into localStorage before every page load ─────────────
-      // bytenut.com is a SPA that reads the auth token from localStorage.
-      // evaluateOnNewDocument runs before any page JS so the token is always
-      // present when the app bootstraps, preventing login redirects.
-      if (creds.ylToken) {
-        await this.page.evaluateOnNewDocument((token: string) => {
-          try { localStorage.setItem("yl-token", token); } catch {}
-        }, creds.ylToken);
-        this.log("yl-token localStorage injection registered (runs on every navigation).");
-      }
-
       this.log("Chromium launched successfully.");
       const loginOk = await this.performLogin(creds);
       if (!loginOk) {
@@ -372,60 +363,134 @@ class BotManager {
   private async performLogin(creds: Credentials): Promise<boolean> {
     if (!this.page) return false;
 
-    this.log("Authenticating via yl-token (localStorage injection)...");
+    this.log("Authenticating via username/password...");
 
-    // Helper: write the token into the current page's localStorage
-    const injectTokenNow = async () => {
-      try {
-        await this.page!.evaluate((token: string) => {
-          try { localStorage.setItem("yl-token", token); } catch {}
-        }, creds.ylToken);
-      } catch { /* ignore — page may be navigating */ }
-    };
-
-    // Navigate to target directly — evaluateOnNewDocument already set localStorage
+    // Navigate to target first to see if we're already authenticated
     this.log(`Navigating to target URL: ${creds.targetUrl}`);
     await this.page.goto(creds.targetUrl, {
       waitUntil: "domcontentloaded",
       timeout: 90000,
     });
 
-    // Also set it imperatively in the current context (covers SPA rehydration)
-    await injectTokenNow();
     await this.dismissPopups();
     await new Promise((r) => setTimeout(r, 2000));
     await this.dismissPopups();
 
-    // Check if we landed correctly
     const firstUrl = this.page.url();
     if (!this.isOnLoginPage(firstUrl)) {
-      this.log(`Authentication successful. URL: ${firstUrl}`);
+      this.log(`Already authenticated. URL: ${firstUrl}`);
       return true;
     }
 
-    // Bounced to login — re-inject token into localStorage and retry
-    this.log("Target bounced to login page — re-injecting yl-token into localStorage and retrying...", "warn");
-    await injectTokenNow();
+    // We're on the login page — navigate to loginUrl and fill credentials
+    this.log(`On login page — navigating to login URL: ${creds.loginUrl}`);
+    await this.page.goto(creds.loginUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 90000,
+    });
+
+    await this.dismissPopups();
     await new Promise((r) => setTimeout(r, 1500));
 
+    try {
+      // Find and fill username field (try common selectors)
+      const usernameSelectors = [
+        'input[name="username"]',
+        'input[name="email"]',
+        'input[type="email"]',
+        'input[type="text"]',
+        'input[id*="user"]',
+        'input[id*="email"]',
+        'input[placeholder*="email" i]',
+        'input[placeholder*="username" i]',
+      ];
+      let userFilled = false;
+      for (const sel of usernameSelectors) {
+        try {
+          await this.page.waitForSelector(sel, { timeout: 3000 });
+          await this.page.click(sel, { clickCount: 3 });
+          await this.page.type(sel, creds.username, { delay: 50 });
+          userFilled = true;
+          this.log(`Username filled using selector: ${sel}`);
+          break;
+        } catch { continue; }
+      }
+      if (!userFilled) {
+        this.log("Could not find username input field.", "warn");
+      }
+
+      // Find and fill password field
+      const passwordSelectors = [
+        'input[name="password"]',
+        'input[type="password"]',
+        'input[id*="pass"]',
+        'input[placeholder*="password" i]',
+      ];
+      let passFilled = false;
+      for (const sel of passwordSelectors) {
+        try {
+          await this.page.waitForSelector(sel, { timeout: 3000 });
+          await this.page.click(sel, { clickCount: 3 });
+          await this.page.type(sel, creds.password, { delay: 50 });
+          passFilled = true;
+          this.log(`Password filled using selector: ${sel}`);
+          break;
+        } catch { continue; }
+      }
+      if (!passFilled) {
+        this.log("Could not find password input field.", "warn");
+      }
+
+      // Submit the form
+      const submitSelectors = [
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'button:contains("Login")',
+        'button:contains("Sign in")',
+        'button:contains("Log in")',
+      ];
+      let submitted = false;
+      for (const sel of submitSelectors) {
+        try {
+          await this.page.click(sel);
+          submitted = true;
+          this.log(`Form submitted using selector: ${sel}`);
+          break;
+        } catch { continue; }
+      }
+      if (!submitted) {
+        // Fallback: press Enter in the password field
+        try {
+          await this.page.keyboard.press("Enter");
+          this.log("Form submitted via Enter key.");
+        } catch { /**/ }
+      }
+    } catch (err: any) {
+      this.log(`Login form interaction failed: ${err.message}`, "warn");
+    }
+
+    // Wait for navigation after submit
+    await new Promise((r) => setTimeout(r, 3000));
+    await this.dismissPopups();
+
+    // Now navigate to target
     await this.page.goto(creds.targetUrl, {
       waitUntil: "domcontentloaded",
       timeout: 90000,
     }).catch(() => {});
 
-    await injectTokenNow();
     await this.dismissPopups();
 
-    const retryUrl = this.page.url();
-    if (this.isOnLoginPage(retryUrl)) {
+    const finalUrl = this.page.url();
+    if (this.isOnLoginPage(finalUrl)) {
       this.log(
-        `Target still redirects to login after retry — yl-token may be invalid or expired. URL: ${retryUrl}`,
+        `Still on login page after authentication attempt — credentials may be invalid. URL: ${finalUrl}`,
         "error"
       );
       return false;
     }
 
-    this.log(`Retry navigation succeeded. URL: ${retryUrl}`);
+    this.log(`Login successful. URL: ${finalUrl}`);
     return true;
   }
 
@@ -748,13 +813,6 @@ class BotManager {
     if (!creds.targetUrl) return;
     this.log(`Navigating to target URL: ${creds.targetUrl}`);
     await this.page.goto(creds.targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-    if (creds.ylToken) {
-      try {
-        await this.page.evaluate((token: string) => {
-          try { localStorage.setItem("yl-token", token); } catch {}
-        }, creds.ylToken);
-      } catch { /* ignore */ }
-    }
     await this.dismissPopups();
     this.log("Navigated to target URL successfully.");
   }
