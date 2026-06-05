@@ -260,7 +260,7 @@ class BotManager {
       const prbOpts = (headless: boolean) => ({
         headless,
         args: chromiumArgs,
-        customConfig: { executablePath: CHROMIUM_PATH },
+        customConfig: { chromePath: CHROMIUM_PATH },
         turnstile: true,
         connectOption: { defaultViewport: { width: 1280, height: 720 } },
         disableXvfb: true,
