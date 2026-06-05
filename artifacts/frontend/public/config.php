@@ -11,7 +11,11 @@ $apiBase = '/api';
 <title>AFK Bot — Configuration</title>
 <link rel="stylesheet" href="/assets/base.css">
 <link rel="stylesheet" href="/assets/glass.css">
-<script>window.API_BASE = '<?php echo $apiBase; ?>';</script>
+<script>
+window.API_BASE = (window.location.port === '8080')
+  ? 'http://' + window.location.hostname + ':3001/api'
+  : '/api';
+</script>
 </head>
 <body>
 <div class="app-container">
