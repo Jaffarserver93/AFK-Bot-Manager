@@ -498,34 +498,41 @@ class BotManager {
 
     this.log("Authenticating via username/password...");
 
-    // Navigate to target first to see if we're already authenticated
-    this.log(`Navigating to target URL: ${creds.targetUrl}`);
-    await this.page.goto(creds.targetUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 90000,
-    });
-    await this.waitForCloudflareToPass();
-
-    await this.dismissPopups();
-    await new Promise((r) => setTimeout(r, 2000));
-    await this.dismissPopups();
-
-    const firstUrl = this.page.url();
-    if (!this.isOnLoginPage(firstUrl) && !(await this.isOnCloudflarePage())) {
-      this.log(`Already authenticated. URL: ${firstUrl}`);
-      return true;
-    }
-
-    // We're on the login page — navigate to loginUrl and fill credentials
-    this.log(`On login page — navigating to login URL: ${creds.loginUrl}`);
+    // ── Step 1: Go to login URL directly ────────────────────────────────────
+    // Always hit loginUrl first — if already authenticated, the site will
+    // redirect away from /auth/login to the dashboard/target. This is more
+    // reliable than checking targetUrl, which bytenut.com briefly serves to
+    // unauthenticated users before kicking to /auth/login.
+    this.log(`Navigating to login URL: ${creds.loginUrl}`);
     await this.page.goto(creds.loginUrl, {
       waitUntil: "domcontentloaded",
       timeout: 90000,
     });
     await this.waitForCloudflareToPass();
-
     await this.dismissPopups();
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, 2000));
+    await this.dismissPopups();
+
+    const urlAfterLoginNav = this.page.url();
+
+    // ── Step 2: If already logged in, site redirected away from /auth/login ─
+    if (!this.isOnLoginPage(urlAfterLoginNav) && !(await this.isOnCloudflarePage())) {
+      this.log(`Already authenticated — redirected to: ${urlAfterLoginNav}`);
+      // Make sure we end up on the target page
+      if (urlAfterLoginNav.replace(/\/$/, "") !== creds.targetUrl.replace(/\/$/, "")) {
+        this.log(`Navigating to target URL: ${creds.targetUrl}`);
+        await this.page.goto(creds.targetUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: 90000,
+        });
+        await this.waitForCloudflareToPass();
+        await this.dismissPopups();
+      }
+      return true;
+    }
+
+    // ── Step 3: Fill login form ──────────────────────────────────────────────
+    this.log("Login form detected — filling credentials...");
 
     try {
       // Find and fill username field (try common selectors)
