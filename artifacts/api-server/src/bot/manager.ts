@@ -99,7 +99,7 @@ class BotManager {
   private sseClients: Map<string, SSEClient> = new Map();
   private _status: "idle" | "starting" | "running" | "stopping" = "idle";
   public _reloadLoopStartedAt: number = 0;
-  public reloadIntervalMs: number = 60000;
+  public reloadIntervalMs: number = 120000;
   private _lastHealthyAt: number = 0;
   private _healthWatchdog: ReturnType<typeof setInterval> | null = null;
   private _autoRestartCount: number = 0;
@@ -1130,7 +1130,7 @@ class BotManager {
           this.log(`Page reload failed (cycle ${reloadCount}): ${err.message}`, "warn");
         }
       }
-    }, 60000);
+    }, this.reloadIntervalMs);
   }
 
   private async checkAndRenewServer(): Promise<boolean> {
