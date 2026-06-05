@@ -74,6 +74,40 @@ window.API_BASE = (window.location.port === '8080')
       </div>
     </div>
 
+    <!-- Page Monitor -->
+    <div class="section-card" id="pageMonitorCard" style="display:none;">
+      <div class="section-header">
+        <div class="section-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/></svg>
+        </div>
+        <div class="section-title">Page Monitor</div>
+        <div id="reloadCountdown" style="font-size:12px;opacity:0.6;margin-left:auto;padding-right:4px;"></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;padding:4px 0;">
+        <!-- Current URL -->
+        <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px;">
+          <div style="font-size:11px;opacity:0.5;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;">Current Page</div>
+          <div id="pmCurrentUrl" style="font-size:12px;word-break:break-all;opacity:0.9;font-family:monospace;">—</div>
+        </div>
+        <!-- Target URL -->
+        <div style="background:rgba(255,255,255,0.05);border-radius:8px;padding:10px 12px;">
+          <div style="font-size:11px;opacity:0.5;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;">Target Page</div>
+          <div id="pmTargetUrl" style="font-size:12px;word-break:break-all;opacity:0.9;font-family:monospace;">—</div>
+        </div>
+        <!-- Status row -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <div id="pmStatus" style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;">
+            <span id="pmStatusDot" style="width:10px;height:10px;border-radius:50%;background:#666;flex-shrink:0;"></span>
+            <span id="pmStatusText">Checking...</span>
+          </div>
+          <button id="pmGoBtn" class="btn btn-restart" style="display:none;padding:6px 14px;font-size:12px;" onclick="goToTarget()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            Go to Target
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Audit Log Terminal -->
     <div class="section-card log-card">
       <div class="section-header">
@@ -142,6 +176,7 @@ function updateUI(status, uptime) {
     toggleBtn.className = 'btn btn-action btn-stop';
     restartBtn.disabled = false;
     startScreenshotUpdates();
+    startPageMonitor();
   } else if (status === 'starting') {
     dot.className = 'status-dot starting';
     dotLg.className = 'status-dot-lg starting';
@@ -155,6 +190,7 @@ function updateUI(status, uptime) {
     statusText.textContent = 'Stopping...';
     toggleBtn.disabled = true;
     restartBtn.disabled = true;
+    stopPageMonitor();
   } else {
     dot.className = 'status-dot';
     dotLg.className = 'status-dot-lg';
@@ -165,6 +201,7 @@ function updateUI(status, uptime) {
     toggleBtn.disabled = false;
     restartBtn.disabled = true;
     stopScreenshotUpdates();
+    stopPageMonitor();
     document.getElementById('screenshotImg').style.display = 'none';
     document.getElementById('previewPlaceholder').style.display = 'flex';
   }
@@ -304,6 +341,71 @@ async function loadInterval() {
       if (botStatus === 'running') startScreenshotUpdates();
     }
   } catch(e) {}
+}
+
+// ===== Page Monitor =====
+let pageMonitorTimer = null;
+
+async function pollPageStatus() {
+  if (botStatus !== 'running') return;
+  try {
+    const r = await fetch(API + '/bot/page-status');
+    const d = await r.json();
+    updatePageMonitor(d);
+  } catch(e) {}
+}
+
+function updatePageMonitor(d) {
+  const card = document.getElementById('pageMonitorCard');
+  const currentEl = document.getElementById('pmCurrentUrl');
+  const targetEl = document.getElementById('pmTargetUrl');
+  const dot = document.getElementById('pmStatusDot');
+  const text = document.getElementById('pmStatusText');
+  const goBtn = document.getElementById('pmGoBtn');
+  const countdown = document.getElementById('reloadCountdown');
+
+  card.style.display = '';
+  currentEl.textContent = d.currentUrl || '(unknown)';
+  targetEl.textContent = d.targetUrl || '(not set)';
+
+  if (d.onTarget) {
+    dot.style.background = '#22c55e';
+    text.textContent = 'On Target ✓';
+    text.style.color = '#22c55e';
+    goBtn.style.display = 'none';
+  } else {
+    dot.style.background = '#f59e0b';
+    text.textContent = 'Off Target — redirecting...';
+    text.style.color = '#f59e0b';
+    goBtn.style.display = 'flex';
+  }
+
+  if (d.nextReloadIn !== null && d.nextReloadIn !== undefined) {
+    countdown.textContent = 'Reload in ' + d.nextReloadIn + 's';
+  } else {
+    countdown.textContent = '';
+  }
+}
+
+async function goToTarget() {
+  const btn = document.getElementById('pmGoBtn');
+  btn.disabled = true;
+  try {
+    await fetch(API + '/bot/go-to-target', { method: 'POST' });
+    setTimeout(pollPageStatus, 1500);
+  } catch(e) {}
+  setTimeout(() => { btn.disabled = false; }, 3000);
+}
+
+function startPageMonitor() {
+  if (pageMonitorTimer) return;
+  pageMonitorTimer = setInterval(pollPageStatus, 3000);
+  pollPageStatus();
+}
+
+function stopPageMonitor() {
+  if (pageMonitorTimer) { clearInterval(pageMonitorTimer); pageMonitorTimer = null; }
+  document.getElementById('pageMonitorCard').style.display = 'none';
 }
 
 // ===== Init =====
