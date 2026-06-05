@@ -131,8 +131,9 @@ async function pollStatus() {
     const r = await fetch(API + '/bot/status');
     const d = await r.json();
     updateUI(d.status, d.uptimeSeconds || 0);
-    if (d.timeRemaining && d.timeRemaining !== '--:--') {
-      updateTimeRemaining(d.timeRemaining, d.timeRemainingMinutes ?? -1);
+    // Always update time remaining row when bot is active (shows "Checking..." until first read)
+    if (d.status === 'running' || d.status === 'starting') {
+      updateTimeRemaining(d.timeRemaining || '--:--', d.timeRemainingMinutes ?? -1);
     }
     updateHealthRow(d.status, d.autoRestartCount ?? 0, d.lastHealthyAt ?? null);
   } catch(e) {}

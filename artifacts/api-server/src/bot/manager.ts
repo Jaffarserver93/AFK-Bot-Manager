@@ -539,23 +539,27 @@ class BotManager {
     this.log("Login form detected — filling credentials...");
 
     try {
-      // Find and fill username field (try common selectors)
+      // ── Username field ──────────────────────────────────────────────────────
+      // bytenut.com uses Element UI (el-input__inner class) — put those first.
       const usernameSelectors = [
+        'input.el-input__inner[placeholder="Username"]',
+        'input.el-input__inner[placeholder*="sername" i]',
         'input[name="username"]',
         'input[name="email"]',
         'input[type="email"]',
-        'input[type="text"]',
+        'input[placeholder*="username" i]',
+        'input[placeholder*="email" i]',
         'input[id*="user"]',
         'input[id*="email"]',
-        'input[placeholder*="email" i]',
-        'input[placeholder*="username" i]',
+        'input[type="text"]',
       ];
       let userFilled = false;
       for (const sel of usernameSelectors) {
         try {
-          await this.page.waitForSelector(sel, { timeout: 3000 });
+          await this.page.waitForSelector(sel, { timeout: 8000 });
           await this.page.click(sel, { clickCount: 3 });
-          await this.page.type(sel, creds.username, { delay: 50 });
+          await new Promise((r) => setTimeout(r, 200));
+          await this.page.type(sel, creds.username, { delay: 60 });
           userFilled = true;
           this.log(`Username filled using selector: ${sel}`);
           break;
@@ -565,19 +569,24 @@ class BotManager {
         this.log("Could not find username input field.", "warn");
       }
 
-      // Find and fill password field
+      await new Promise((r) => setTimeout(r, 300));
+
+      // ── Password field ──────────────────────────────────────────────────────
       const passwordSelectors = [
+        'input.el-input__inner[placeholder="Password"]',
+        'input.el-input__inner[placeholder*="assword" i]',
         'input[name="password"]',
         'input[type="password"]',
-        'input[id*="pass"]',
         'input[placeholder*="password" i]',
+        'input[id*="pass"]',
       ];
       let passFilled = false;
       for (const sel of passwordSelectors) {
         try {
-          await this.page.waitForSelector(sel, { timeout: 3000 });
+          await this.page.waitForSelector(sel, { timeout: 8000 });
           await this.page.click(sel, { clickCount: 3 });
-          await this.page.type(sel, creds.password, { delay: 50 });
+          await new Promise((r) => setTimeout(r, 200));
+          await this.page.type(sel, creds.password, { delay: 60 });
           passFilled = true;
           this.log(`Password filled using selector: ${sel}`);
           break;
@@ -587,16 +596,20 @@ class BotManager {
         this.log("Could not find password input field.", "warn");
       }
 
-      // Submit the form
-      const submitSelectors = [
+      await new Promise((r) => setTimeout(r, 400));
+
+      // ── Submit button ───────────────────────────────────────────────────────
+      // Try CSS selectors first, then find button by visible text (JS eval),
+      // then fall back to Enter key.
+      let submitted = false;
+
+      // CSS selectors (valid CSS only — no :contains())
+      const submitCssSelectors = [
         'button[type="submit"]',
         'input[type="submit"]',
-        'button:contains("Login")',
-        'button:contains("Sign in")',
-        'button:contains("Log in")',
+        'button.el-button--primary',
       ];
-      let submitted = false;
-      for (const sel of submitSelectors) {
+      for (const sel of submitCssSelectors) {
         try {
           await this.page.click(sel);
           submitted = true;
@@ -604,8 +617,27 @@ class BotManager {
           break;
         } catch { continue; }
       }
+
+      // Find button by text content via JS evaluate
       if (!submitted) {
-        // Fallback: press Enter in the password field
+        try {
+          const clicked = await this.page.evaluate(() => {
+            const keywords = ["sign in", "login", "log in", "submit"];
+            const btns = Array.from(document.querySelectorAll("button, input[type=submit]")) as HTMLElement[];
+            const btn = btns.find((el) =>
+              keywords.some((kw) => (el.textContent || (el as HTMLInputElement).value || "").toLowerCase().includes(kw))
+            );
+            if (btn) { btn.click(); return true; }
+            return false;
+          });
+          if (clicked) {
+            submitted = true;
+            this.log("Form submitted via button text match.");
+          }
+        } catch { /**/ }
+      }
+
+      if (!submitted) {
         try {
           await this.page.keyboard.press("Enter");
           this.log("Form submitted via Enter key.");
@@ -1026,7 +1058,7 @@ class BotManager {
 
       this.log(`Reloading page (cycle ${reloadCount})...`);
       try {
-        await this.page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+        await this.page.reload({ waitUntil: "domcontentloaded", timeout: 60000 });
 
         // Wait for the SPA sidebar to render — poll until RENEW SERVER text appears
         this.log(`Page reloaded (cycle ${reloadCount}). Waiting for page to render...`);
