@@ -433,6 +433,66 @@ class BotManager {
     return u.includes("/auth/login") || u.includes("/login");
   }
 
+  /**
+   * Returns true if the current page is a Cloudflare interstitial/challenge.
+   * Covers both the initial "Verifying you are human" and the
+   * "Verification successful. Waiting for X to respond" states.
+   */
+  private async isOnCloudflarePage(): Promise<boolean> {
+    if (!this.page) return false;
+    try {
+      const result = await this.page.evaluate(() => {
+        const title = (document.title || "").toLowerCase();
+        const body = (document.body?.innerText || "").toLowerCase();
+        return (
+          title.includes("just a moment") ||
+          title.includes("attention required") ||
+          body.includes("verifying you are human") ||
+          body.includes("performing security verification") ||
+          body.includes("verification successful") ||
+          body.includes("checking your browser") ||
+          body.includes("enable javascript and cookies") ||
+          body.includes("cloudflare ray id")
+        );
+      });
+      return !!result;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Waits up to `maxMs` (default 90 s) for Cloudflare to finish its challenge
+   * and redirect away from the interstitial page. Logs progress every 10 s.
+   */
+  private async waitForCloudflareToPass(maxMs = 90000): Promise<void> {
+    const onCf = await this.isOnCloudflarePage();
+    if (!onCf) return; // not a Cloudflare page — nothing to wait for
+
+    this.log("Cloudflare challenge detected — waiting up to 90s for verification...", "warn");
+    const start = Date.now();
+    let lastLogAt = 0;
+
+    while (Date.now() - start < maxMs) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const stillOnCf = await this.isOnCloudflarePage();
+      if (!stillOnCf) {
+        const elapsed = Math.round((Date.now() - start) / 1000);
+        this.log(`Cloudflare verification passed after ${elapsed}s. Continuing...`);
+        // Extra settle time for the real page to fully load
+        await new Promise((r) => setTimeout(r, 2000));
+        return;
+      }
+      const elapsed = Math.round((Date.now() - start) / 1000);
+      if (elapsed - lastLogAt >= 10) {
+        lastLogAt = elapsed;
+        this.log(`Still waiting for Cloudflare to pass... (${elapsed}s / 90s)`);
+      }
+    }
+
+    this.log("Cloudflare challenge did not pass within 90s — proceeding anyway.", "warn");
+  }
+
   private async performLogin(creds: Credentials): Promise<boolean> {
     if (!this.page) return false;
 
@@ -444,13 +504,14 @@ class BotManager {
       waitUntil: "domcontentloaded",
       timeout: 90000,
     });
+    await this.waitForCloudflareToPass();
 
     await this.dismissPopups();
     await new Promise((r) => setTimeout(r, 2000));
     await this.dismissPopups();
 
     const firstUrl = this.page.url();
-    if (!this.isOnLoginPage(firstUrl)) {
+    if (!this.isOnLoginPage(firstUrl) && !(await this.isOnCloudflarePage())) {
       this.log(`Already authenticated. URL: ${firstUrl}`);
       return true;
     }
@@ -461,6 +522,7 @@ class BotManager {
       waitUntil: "domcontentloaded",
       timeout: 90000,
     });
+    await this.waitForCloudflareToPass();
 
     await this.dismissPopups();
     await new Promise((r) => setTimeout(r, 1500));
@@ -551,6 +613,7 @@ class BotManager {
       waitUntil: "domcontentloaded",
       timeout: 90000,
     }).catch(() => {});
+    await this.waitForCloudflareToPass();
 
     await this.dismissPopups();
 
@@ -885,7 +948,8 @@ class BotManager {
     const creds = await this.readCredentials();
     if (!creds.targetUrl) return;
     this.log(`Navigating to target URL: ${creds.targetUrl}`);
-    await this.page.goto(creds.targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await this.page.goto(creds.targetUrl, { waitUntil: "domcontentloaded", timeout: 90000 });
+    await this.waitForCloudflareToPass();
     await this.dismissPopups();
     this.log("Navigated to target URL successfully.");
   }
@@ -938,7 +1002,8 @@ class BotManager {
             "warn"
           );
           try {
-            await this.page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+            await this.page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 90000 });
+            await this.waitForCloudflareToPass();
             await this.dismissPopups();
             this.log(`Navigated to target URL (cycle ${reloadCount}).`);
           } catch (err: any) {
