@@ -532,14 +532,33 @@ class BotManager {
     }
 
     // ── Step 3: Fill login form ──────────────────────────────────────────────
-    // NOTE: Do NOT call dismissPopups() before filling the form — the popup
-    // dismissal logic removes fixed/absolute elements matching modal/overlay
-    // class names, which can include the login form's own container and delete
-    // the input fields before we get a chance to fill them.
-    this.log("Login form detected — filling credentials...");
+    // IMPORTANT: Do NOT call dismissPopups() before filling the form — the
+    // popup dismissal removes fixed/absolute elements matching modal/overlay
+    // class names, which can include the login form's container, wiping inputs.
+    //
+    // After Cloudflare's JS challenge passes and redirects back to /auth/login,
+    // the Vue SPA still needs a few seconds to boot and inject the form. We
+    // wait up to 15 s for the password field to actually appear before
+    // touching anything — this prevents pressing Enter on a blank form (which
+    // would trigger a SECOND Cloudflare challenge).
+    this.log("Login form detected — waiting for form fields to render...");
 
     try {
-      // Find and fill username field (try common selectors)
+      // ── Wait for the password field to appear (up to 15 s) ────────────────
+      // Using password input as the gate — it only appears after the SPA mounts.
+      let formRendered = false;
+      try {
+        await this.page.waitForSelector('input[type="password"]', { timeout: 15000 });
+        formRendered = true;
+        this.log("Login form is ready.");
+      } catch {
+        this.log("Password field not found after 15 s — trying anyway.", "warn");
+      }
+
+      // Extra settle time for Vue reactivity after mount
+      if (formRendered) await new Promise((r) => setTimeout(r, 800));
+
+      // ── Fill username ──────────────────────────────────────────────────────
       const usernameSelectors = [
         'input[name="username"]',
         'input[name="email"]',
@@ -565,7 +584,7 @@ class BotManager {
         this.log("Could not find username input field.", "warn");
       }
 
-      // Find and fill password field
+      // ── Fill password ──────────────────────────────────────────────────────
       const passwordSelectors = [
         'input[name="password"]',
         'input[type="password"]',
@@ -573,12 +592,14 @@ class BotManager {
         'input[placeholder*="password" i]',
       ];
       let passFilled = false;
+      let lastPassSel = "";
       for (const sel of passwordSelectors) {
         try {
           await this.page.waitForSelector(sel, { timeout: 3000 });
           await this.page.click(sel, { clickCount: 3 });
           await this.page.type(sel, creds.password, { delay: 50 });
           passFilled = true;
+          lastPassSel = sel;
           this.log(`Password filled using selector: ${sel}`);
           break;
         } catch { continue; }
@@ -587,13 +608,22 @@ class BotManager {
         this.log("Could not find password input field.", "warn");
       }
 
-      // Submit the form
+      // ── Only submit if BOTH fields were filled ─────────────────────────────
+      // Submitting with empty fields triggers a second Cloudflare challenge.
+      if (!userFilled || !passFilled) {
+        this.log(
+          "Skipping form submit — one or more fields were not filled. Will retry on next cycle.",
+          "warn"
+        );
+        return false;
+      }
+
+      // ── Submit ─────────────────────────────────────────────────────────────
       const submitSelectors = [
         'button[type="submit"]',
         'input[type="submit"]',
-        'button:contains("Login")',
-        'button:contains("Sign in")',
-        'button:contains("Log in")',
+        'button[class*="login" i]',
+        'button[class*="sign" i]',
       ];
       let submitted = false;
       for (const sel of submitSelectors) {
@@ -605,8 +635,9 @@ class BotManager {
         } catch { continue; }
       }
       if (!submitted) {
-        // Fallback: press Enter in the password field
+        // Fallback: press Enter from the password field
         try {
+          if (lastPassSel) await this.page.focus(lastPassSel).catch(() => {});
           await this.page.keyboard.press("Enter");
           this.log("Form submitted via Enter key.");
         } catch { /**/ }
@@ -1028,19 +1059,26 @@ class BotManager {
       try {
         await this.page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
 
-        // Wait for the SPA sidebar to render — poll until RENEW SERVER text appears
+        // Wait for the SPA sidebar to render — poll until the sidebar nav
+        // contains any meaningful link/button (signals Vue has mounted).
+        // We look for RENEW SERVER specifically, but also accept any sidebar
+        // nav element as a sign the page is ready (catches renamed buttons).
         this.log(`Page reloaded (cycle ${reloadCount}). Waiting for page to render...`);
         await this.page.waitForFunction(
           () => {
-            const all = Array.from(document.querySelectorAll("a, button, div, span, li"));
+            const all = Array.from(document.querySelectorAll("a, button, div, span, li, nav *"));
             return all.some((el) => {
               const txt = (el.textContent || "").trim().toUpperCase();
-              return txt === "RENEW SERVER" || (txt.includes("RENEW") && txt.includes("SERVER") && txt.length < 40);
+              // Primary: RENEW SERVER button
+              if (txt === "RENEW SERVER" || (txt.includes("RENEW") && txt.includes("SERVER") && txt.length < 50)) return true;
+              // Fallback: any sidebar button that suggests the SPA has mounted
+              if ((txt === "DASHBOARD" || txt === "FREE SERVER" || txt === "GAMEPANEL") && txt.length < 30) return true;
+              return false;
             });
           },
-          { timeout: 20000, polling: 800 }
+          { timeout: 35000, polling: 600 }
         ).catch(() => {
-          this.log("RENEW SERVER button not found after page load — page may still be loading.", "warn");
+          this.log("Page sidebar not detected after 35 s — page may still be loading.", "warn");
         });
 
         // Short buffer for Vue reactivity to fully settle after the element appears

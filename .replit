@@ -24,13 +24,13 @@ args = "Start AFK Bot"
 name = "Start AFK Bot"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "bash start.sh"
-waitForPort = 8080
-
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash -c 'export PORT=3001 DATA_DIR=$HOME/afkbot-data STATIC_DIR=$(pwd)/artifacts/frontend/public && mkdir -p $DATA_DIR && pkill -f dist/index.mjs 2>/dev/null; sleep 1 && (cd artifacts/api-server && pnpm run start) &  sleep 6 && cd artifacts/frontend && php -S 0.0.0.0:8080 -t public'"
+waitForPort = 8080
 
 [agent]
 stack = "PNPM_WORKSPACE"
