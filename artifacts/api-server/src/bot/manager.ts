@@ -895,6 +895,35 @@ class BotManager {
   }
 
   /**
+   * Single shared re-authentication entry point used by ALL paths (watchdog,
+   * reload cycle, anti-AFK recovery).  Holds _reloginInProgress as a mutex so
+   * concurrent callers skip rather than race to fill the same form twice.
+   */
+  private async reAuthenticate(source: string): Promise<boolean> {
+    if (this._reloginInProgress) {
+      this.log(`${source}: re-authentication already in progress — skipping duplicate.`);
+      return false;
+    }
+    this._reloginInProgress = true;
+    try {
+      const creds = await this.readCredentials();
+      const loginOk = await this.performLogin(creds);
+      if (loginOk) {
+        this.log(`${source}: re-authentication successful.`);
+        this._lastHealthyAt = Date.now();
+      } else {
+        this.log(`${source}: re-authentication failed — will retry.`, "error");
+      }
+      return loginOk;
+    } catch (err: any) {
+      this.log(`${source}: re-authentication error: ${err.message}`, "error");
+      return false;
+    } finally {
+      this._reloginInProgress = false;
+    }
+  }
+
+  /**
    * Checks every 15 seconds whether the bot has been redirected to the login
    * page (e.g. session expired). If so, immediately re-authenticates and
    * navigates back to the target URL — without waiting for the slower reload cycle.
@@ -911,27 +940,11 @@ class BotManager {
 
       if (!this.isOnLoginPage(currentUrl)) return;
 
-      // We're on the login page while the bot is supposed to be running
-      this._reloginInProgress = true;
       this.log(
         `⚠ Login page detected while bot is running (URL: ${currentUrl}) — re-authenticating...`,
         "warn"
       );
-
-      try {
-        const creds = await this.readCredentials();
-        const loginOk = await this.performLogin(creds);
-        if (loginOk) {
-          this.log("Re-authentication successful — bot is back on the target page.");
-          this._lastHealthyAt = Date.now();
-        } else {
-          this.log("Re-authentication failed — will retry on next check.", "error");
-        }
-      } catch (err: any) {
-        this.log(`Re-authentication error: ${err.message}`, "error");
-      } finally {
-        this._reloginInProgress = false;
-      }
+      await this.reAuthenticate("Login watchdog");
     }, 15000);
   }
 
@@ -1032,24 +1045,18 @@ class BotManager {
       if (!onTarget && targetUrl) {
         // ── Detected off-target ───────────────────────────────────────────────
         if (this.isOnLoginPage(currentUrl)) {
-          // Session expired / was never set — re-run the full login flow
+          // Session expired — use shared mutex so watchdog can't race us
+          if (this._reloginInProgress) {
+            this.log(
+              `Reload cycle ${reloadCount}: re-authentication already in progress — skipping.`
+            );
+            return;
+          }
           this.log(
             `Reload cycle ${reloadCount}: bot is on the login page — session may have expired. Re-authenticating...`,
             "warn"
           );
-          try {
-            const loginOk = await this.performLogin(creds!);
-            if (loginOk) {
-              this.log(`Re-authentication successful (cycle ${reloadCount}).`);
-            } else {
-              this.log(
-                `Re-authentication failed (cycle ${reloadCount}) — will retry on next cycle.`,
-                "error"
-              );
-            }
-          } catch (err: any) {
-            this.log(`Re-authentication error (cycle ${reloadCount}): ${err.message}`, "error");
-          }
+          await this.reAuthenticate(`Reload cycle ${reloadCount}`);
         } else {
           this.log(
             `Reload cycle ${reloadCount}: bot is on "${currentUrl}" — not the target page. Navigating to target...`,
