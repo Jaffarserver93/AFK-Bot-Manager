@@ -509,15 +509,15 @@ class BotManager {
       timeout: 90000,
     });
     await this.waitForCloudflareToPass();
-    await this.dismissPopups();
+    // Give the page a moment to settle after Cloudflare passes
     await new Promise((r) => setTimeout(r, 2000));
-    await this.dismissPopups();
 
     const urlAfterLoginNav = this.page.url();
 
     // ── Step 2: If already logged in, site redirected away from /auth/login ─
     if (!this.isOnLoginPage(urlAfterLoginNav) && !(await this.isOnCloudflarePage())) {
       this.log(`Already authenticated — redirected to: ${urlAfterLoginNav}`);
+      await this.dismissPopups();
       // Make sure we end up on the target page
       if (urlAfterLoginNav.replace(/\/$/, "") !== creds.targetUrl.replace(/\/$/, "")) {
         this.log(`Navigating to target URL: ${creds.targetUrl}`);
@@ -532,6 +532,10 @@ class BotManager {
     }
 
     // ── Step 3: Fill login form ──────────────────────────────────────────────
+    // NOTE: Do NOT call dismissPopups() before filling the form — the popup
+    // dismissal logic removes fixed/absolute elements matching modal/overlay
+    // class names, which can include the login form's own container and delete
+    // the input fields before we get a chance to fill them.
     this.log("Login form detected — filling credentials...");
 
     try {

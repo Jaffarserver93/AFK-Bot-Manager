@@ -398,6 +398,9 @@ async function pollPageStatus() {
     if (d.botStatus === 'idle') {
       curEl.textContent = 'Bot not running';
       curEl.style.color = '#64748b';
+    } else if (d.botStatus === 'starting') {
+      curEl.textContent = d.currentUrl || '(logging in...)';
+      curEl.style.color = '#fbbf24';
     } else {
       curEl.textContent = d.currentUrl || '(navigating...)';
       curEl.style.color = d.onTarget ? '#4ade80' : '#f87171';
@@ -410,6 +413,11 @@ async function pollPageStatus() {
       badge.style.background = 'rgba(100,100,100,0.2)';
       badge.style.color = '#aaa';
       badge.style.border = '1px solid rgba(100,100,100,0.3)';
+    } else if (d.botStatus === 'starting') {
+      badge.textContent = 'LOGGING IN';
+      badge.style.background = 'rgba(251,191,36,0.15)';
+      badge.style.color = '#fbbf24';
+      badge.style.border = '1px solid rgba(251,191,36,0.3)';
     } else if (d.onTarget) {
       badge.textContent = 'ON TARGET';
       badge.style.background = 'rgba(34,197,94,0.15)';
