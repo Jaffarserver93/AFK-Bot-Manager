@@ -124,6 +124,7 @@ let screenshotInterval = 1000;
 let screenshotTimer = null;
 let sseSource = null;
 let uptimeSeconds = 0;
+let screenshotPending = false;
 
 async function pollStatus() {
   try {
@@ -284,6 +285,8 @@ function stopScreenshotUpdates() {
 
 function fetchScreenshot() {
   if (botStatus !== 'running' && botStatus !== 'starting') return;
+  if (screenshotPending) return;
+  screenshotPending = true;
   const img = document.getElementById('screenshotImg');
   const ph = document.getElementById('previewPlaceholder');
   const newImg = new Image();
@@ -291,7 +294,9 @@ function fetchScreenshot() {
     img.src = this.src;
     img.style.display = 'block';
     ph.style.display = 'none';
+    screenshotPending = false;
   };
+  newImg.onerror = function() { screenshotPending = false; };
   newImg.src = API + '/bot/screenshot?t=' + Date.now();
 }
 
