@@ -237,22 +237,27 @@ class BotManager {
         this.log("Proxy disabled — using direct connection.");
       }
 
-      this.log("Loading puppeteer-real-browser for Cloudflare bypass...");
+      this.log(`Launching Chromium: ${CHROMIUM_PATH}`);
 
-      let connectFn: any;
+      // ── 3-tier launch strategy ───────────────────────────────────────────────
+      // Tier 1 & 2: puppeteer-real-browser (best Cloudflare/Turnstile bypass)
+      //   – Tier 1: non-headless (needs Xvfb; ideal on servers/Railway)
+      //   – Tier 2: headless  (fallback if display is unavailable)
+      // Tier 3: rebrowser-puppeteer-core direct launch
+      //   – Bypasses puppeteer-real-browser's subprocess launcher entirely.
+      //   – Works on proot/Termux where Tier 1/2 fail with ECONNREFUSED.
+      //   – On a residential IP, headless Chrome still passes Cloudflare.
+      // ─────────────────────────────────────────────────────────────────────────
+
+      let connectFn: any = null;
       try {
         const mod = _require("puppeteer-real-browser");
         connectFn = mod.connect;
-      } catch (err: any) {
-        this._status = "idle";
-        throw new Error(
-          `Failed to load puppeteer-real-browser: ${err.message}`
-        );
+      } catch {
+        this.log("puppeteer-real-browser not loadable — will use direct launch.", "warn");
       }
 
-      this.log(`Launching Chromium: ${CHROMIUM_PATH}`);
-
-      const launchOpts = (headless: boolean) => ({
+      const prbOpts = (headless: boolean) => ({
         headless,
         args: chromiumArgs,
         customConfig: { executablePath: CHROMIUM_PATH },
@@ -262,25 +267,68 @@ class BotManager {
         ignoreAllFlags: false,
       });
 
-      let result: any;
-      try {
-        // First attempt: non-headless (real browser, best for Turnstile)
-        result = await connectFn(launchOpts(false));
-        this.log("Chromium launched in non-headless mode.");
-      } catch (err: any) {
-        // Fallback: headless mode (works in proot/Termux without display issues)
-        this.log(
-          `Non-headless launch failed (${err.message}) — retrying in headless mode...`,
-          "warn"
-        );
-        result = await connectFn(launchOpts(true));
-        this.log("Chromium launched in headless mode (fallback).");
+      let launched = false;
+
+      // ── Tier 1: puppeteer-real-browser, non-headless ─────────────────────────
+      if (connectFn && !launched) {
+        try {
+          const r = await connectFn(prbOpts(false));
+          this.browser = r.browser;
+          this.page = r.page;
+          this.log("Launched via puppeteer-real-browser (non-headless).");
+          launched = true;
+        } catch (e: any) {
+          this.log(`Tier 1 failed: ${e.message}`, "warn");
+        }
       }
 
-      this.browser = result.browser;
-      this.page = result.page;
+      // ── Tier 2: puppeteer-real-browser, headless ─────────────────────────────
+      if (connectFn && !launched) {
+        try {
+          const r = await connectFn(prbOpts(true));
+          this.browser = r.browser;
+          this.page = r.page;
+          this.log("Launched via puppeteer-real-browser (headless).");
+          launched = true;
+        } catch (e: any) {
+          this.log(`Tier 2 failed: ${e.message}`, "warn");
+        }
+      }
 
-      await this.page.setViewport({ width: 1280, height: 720 });
+      // ── Tier 3: rebrowser-puppeteer-core direct launch ───────────────────────
+      // Uses the same patched Chromium binding but calls launch() directly,
+      // completely bypassing puppeteer-real-browser's broken subprocess wiring.
+      if (!launched) {
+        this.log(
+          "puppeteer-real-browser unavailable — falling back to direct launch (proot/Termux mode).",
+          "warn"
+        );
+        try {
+          const pCore = _require("rebrowser-puppeteer-core");
+          const browser = await pCore.launch({
+            executablePath: CHROMIUM_PATH,
+            headless: true,
+            args: chromiumArgs,
+            ignoreDefaultArgs: ["--enable-automation"],
+          });
+          const pages = await browser.pages();
+          this.browser = browser;
+          this.page = pages.length > 0 ? pages[0] : await browser.newPage();
+          this.log("Launched via rebrowser-puppeteer-core (direct, headless).");
+          launched = true;
+        } catch (e: any) {
+          throw new Error(
+            `All 3 launch tiers failed.\n` +
+            `Last error: ${e.message}\n` +
+            `Chromium: ${CHROMIUM_PATH}\n` +
+            `Tip: On Ubuntu proot, chromium-browser may be a snap stub that exits silently.\n` +
+            `Fix: apt remove chromium-browser -y && apt install chromium -y\n` +
+            `Then: export CHROMIUM_PATH=$(which chromium) and restart.`
+          );
+        }
+      }
+
+      await this.page!.setViewport({ width: 1280, height: 720 });
 
       // ── Authenticate proxy if enabled ────────────────────────────────────────
       if (proxy.enabled) {
