@@ -143,6 +143,17 @@ class BotManager {
     }
   }
 
+  private emitStateUpdate(key: string, data: Record<string, unknown>) {
+    const payload = JSON.stringify({ type: "state", key, ...data });
+    for (const client of this.sseClients.values()) {
+      try {
+        client.res.write(`data: ${payload}\n\n`);
+      } catch {
+        this.sseClients.delete(client.id);
+      }
+    }
+  }
+
   log(message: string, level: LogEntry["level"] = "info") {
     const entry: LogEntry = {
       time: new Date().toISOString(),
@@ -1180,6 +1191,12 @@ class BotManager {
       }
       this._timeRemainingMinutes = totalMinutes;
 
+      // Push to all SSE clients immediately — dashboard updates without waiting for next poll
+      this.emitStateUpdate("timeRemaining", {
+        value: clockTime,
+        minutes: totalMinutes,
+      });
+
       this.log(`Free server time remaining: ${clockTime} (~${totalMinutes} min)`);
 
       // If under 28 minutes (INCLUDING 0 = expired), click the Extend button
@@ -1514,6 +1531,8 @@ class BotManager {
   }
 
   private async cleanup() {
+    this._timeRemaining = "--:--";
+    this._timeRemainingMinutes = -1;
     if (this._loginWatchdog) {
       clearInterval(this._loginWatchdog);
       this._loginWatchdog = null;

@@ -121,19 +121,20 @@ window.API_BASE = (window.location.port === '8080')
 const API = window.API_BASE;
 let botStatus = 'idle';
 let screenshotInterval = 1000;
-let screenshotTimer = null;
+let screenshotLoopRunning = false;
+let currentBlobUrl = null;
 let sseSource = null;
 let uptimeSeconds = 0;
-let screenshotPending = false;
 
 async function pollStatus() {
   try {
     const r = await fetch(API + '/bot/status');
     const d = await r.json();
     updateUI(d.status, d.uptimeSeconds || 0);
-    // Always update time remaining row when bot is active (shows "Checking..." until first read)
     if (d.status === 'running' || d.status === 'starting') {
       updateTimeRemaining(d.timeRemaining || '--:--', d.timeRemainingMinutes ?? -1);
+    } else {
+      hideTimeRemaining();
     }
     updateHealthRow(d.status, d.autoRestartCount ?? 0, d.lastHealthyAt ?? null);
   } catch(e) {}
@@ -189,13 +190,18 @@ function updateHealthRow(status, restartCount, lastHealthyAt) {
   }
 }
 
+function hideTimeRemaining() {
+  const row = document.getElementById('timeRemainingRow');
+  if (row) row.style.display = 'none';
+}
+
 function updateTimeRemaining(tr, trMin) {
   const row = document.getElementById('timeRemainingRow');
   const txt = document.getElementById('timeRemainingText');
   const badge = document.getElementById('timeRemainingBadge');
   if (!row || !txt || !badge) return;
   row.style.display = 'flex';
-  txt.textContent = tr;
+  txt.textContent = tr || '--:--';
   const low = trMin >= 0 && trMin < 28;
   if (low) {
     badge.style.background = 'rgba(239,68,68,0.15)';
@@ -275,30 +281,49 @@ setInterval(() => {
 }, 1000);
 
 function startScreenshotUpdates() {
-  if (screenshotTimer) return;
-  screenshotTimer = setInterval(fetchScreenshot, screenshotInterval);
-  fetchScreenshot();
+  if (screenshotLoopRunning) return;
+  screenshotLoopRunning = true;
+  runScreenshotLoop();
 }
 
 function stopScreenshotUpdates() {
-  if (screenshotTimer) { clearInterval(screenshotTimer); screenshotTimer = null; }
+  screenshotLoopRunning = false;
+  if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
 }
 
-function fetchScreenshot() {
-  if (botStatus !== 'running' && botStatus !== 'starting') return;
-  if (screenshotPending) return;
-  screenshotPending = true;
-  const img = document.getElementById('screenshotImg');
-  const ph = document.getElementById('previewPlaceholder');
-  const newImg = new Image();
-  newImg.onload = function() {
-    img.src = this.src;
-    img.style.display = 'block';
-    ph.style.display = 'none';
-    screenshotPending = false;
-  };
-  newImg.onerror = function() { screenshotPending = false; };
-  newImg.src = API + '/bot/screenshot?t=' + Date.now();
+async function runScreenshotLoop() {
+  while (screenshotLoopRunning) {
+    if (botStatus === 'running' || botStatus === 'starting') {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 5000);
+      try {
+        const res = await fetch(API + '/bot/screenshot?t=' + Date.now(), {
+          signal: controller.signal,
+          cache: 'no-store'
+        });
+        clearTimeout(tid);
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const img = document.getElementById('screenshotImg');
+          const ph = document.getElementById('previewPlaceholder');
+          if (img && ph) {
+            if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+            currentBlobUrl = url;
+            img.src = url;
+            img.style.display = 'block';
+            ph.style.display = 'none';
+          } else {
+            URL.revokeObjectURL(url);
+          }
+        }
+      } catch(e) {
+        clearTimeout(tid);
+      }
+    }
+    // Wait for configured interval before next shot
+    await new Promise(r => setTimeout(r, screenshotInterval));
+  }
 }
 
 function startSSE() {
@@ -309,6 +334,14 @@ function startSSE() {
   sseSource.onmessage = function(e) {
     try {
       const entry = JSON.parse(e.data);
+      // Real-time state push from server (type:"state")
+      if (entry.type === 'state') {
+        if (entry.key === 'timeRemaining') {
+          updateTimeRemaining(entry.value, entry.minutes);
+        }
+        return;
+      }
+      // Normal log entry
       logEmpty.style.display = 'none';
       const line = document.createElement('div');
       line.className = 'log-line log-' + (entry.level || 'info');
@@ -365,7 +398,7 @@ async function loadInterval() {
     const d = await r.json();
     screenshotInterval = Math.max(100, d.screenshotInterval || 1000);
     document.getElementById('intervalBadge').textContent = screenshotInterval + 'ms';
-    if (screenshotTimer) { clearInterval(screenshotTimer); screenshotTimer = null; if (botStatus === 'running') startScreenshotUpdates(); }
+    // Loop picks up the new interval automatically on the next iteration — no restart needed
   } catch(e) {}
 }
 
