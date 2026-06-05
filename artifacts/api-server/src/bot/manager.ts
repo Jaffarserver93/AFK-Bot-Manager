@@ -10,16 +10,30 @@ const DATA_DIR = process.env.DATA_DIR || path.resolve(process.cwd(), "data");
 const CREDENTIALS_FILE = path.join(DATA_DIR, "credentials.json");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 
-const CHROMIUM_PATH =
-  process.env.CHROMIUM_PATH ||
-  "/usr/bin/chromium" ||
-  "/usr/bin/chromium-browser";
+// Resolve Chromium path — check candidates in order so proot/Termux works
+const CHROMIUM_PATH = (() => {
+  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
+  const candidates = [
+    "/usr/bin/chromium-browser",
+    "/usr/bin/chromium",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/snap/bin/chromium",
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return "/usr/bin/chromium-browser"; // fallback
+})();
 
 const BASE_CHROMIUM_ARGS = [
   "--no-sandbox",
   "--disable-setuid-sandbox",
   "--disable-dev-shm-usage",
   "--disable-gpu",
+  "--no-zygote",                              // required for proot/container envs
+  "--disable-features=VizDisplayCompositor",  // virtual display compatibility
+  "--in-process-gpu",                         // prevent GPU subprocess crash
   "--window-size=1280,720",
   "--disable-default-apps",
   "--disable-sync",
@@ -238,19 +252,30 @@ class BotManager {
 
       this.log(`Launching Chromium: ${CHROMIUM_PATH}`);
 
-      const result = await connectFn({
-        headless: false,
+      const launchOpts = (headless: boolean) => ({
+        headless,
         args: chromiumArgs,
-        customConfig: {
-          executablePath: CHROMIUM_PATH,
-        },
+        customConfig: { executablePath: CHROMIUM_PATH },
         turnstile: true,
-        connectOption: {
-          defaultViewport: { width: 1280, height: 720 },
-        },
+        connectOption: { defaultViewport: { width: 1280, height: 720 } },
         disableXvfb: true,
         ignoreAllFlags: false,
       });
+
+      let result: any;
+      try {
+        // First attempt: non-headless (real browser, best for Turnstile)
+        result = await connectFn(launchOpts(false));
+        this.log("Chromium launched in non-headless mode.");
+      } catch (err: any) {
+        // Fallback: headless mode (works in proot/Termux without display issues)
+        this.log(
+          `Non-headless launch failed (${err.message}) — retrying in headless mode...`,
+          "warn"
+        );
+        result = await connectFn(launchOpts(true));
+        this.log("Chromium launched in headless mode (fallback).");
+      }
 
       this.browser = result.browser;
       this.page = result.page;
